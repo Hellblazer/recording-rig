@@ -1,6 +1,6 @@
 {
   "name": "recording-rig",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hook-driven framework for recording deterministic Claude Code sessions (tutorials, demos, screencasts, fixtures). Drives an isolated child claude under tmux + asciinema + agg, coordinates via lifecycle-hook sentinels (no TUI scraping), validates the cast, renders a GIF.",
   "author": {
     "name": "Hal Hildebrand",

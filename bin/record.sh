@@ -135,11 +135,16 @@ cleanup() {
   for pid in "$DRIVER_PID" "$ASCIINEMA_PID" "$WATCHER_PID"; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   done
-  tmux kill-session -t "$SESSION" 2>/dev/null || true
-  # The consent-sweep aux session lives outside the main SESSION; kill it
-  # too so a signal during the 25s sweep loop doesn't orphan an interactive
-  # claude process.
-  tmux kill-session -t "${SESSION}-warmup" 2>/dev/null || true
+  # Kill the whole tmux server for this session's dedicated socket and
+  # remove the socket file. Each rig run gets its own socket
+  # (rig-<session>), so this is always safe — we never touch the user's
+  # normal tmux server. tmux 3.x leaves the socket file on disk even
+  # after the server exits, so we unlink it explicitly. Cover both
+  # macOS (/private/tmp/tmux-<uid>) and Linux (/tmp/tmux-<uid>) layouts.
+  tmux kill-server 2>/dev/null || true
+  local uid; uid=$(id -u)
+  rm -f "/private/tmp/tmux-${uid}/${RIG_TMUX_SOCKET}" \
+        "/tmp/tmux-${uid}/${RIG_TMUX_SOCKET}" 2>/dev/null || true
   return $rc
 }
 trap cleanup EXIT INT TERM
