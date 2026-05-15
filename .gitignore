@@ -1,5 +1,7 @@
 *.cast
 *.gif
+!docs/assets/*.cast
+!docs/assets/*.gif
 /tmp/
 .DS_Store
 node_modules/

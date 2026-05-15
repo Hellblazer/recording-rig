@@ -4,6 +4,10 @@ A reusable, language-agnostic framework for recording deterministic Claude Code 
 tutorials, demos, screencasts, regression fixtures, anything you want repeatable.
 Hook-driven coordination, no TUI scraping. See [`docs/design.md`](docs/design.md) for the rationale.
 
+![getting started](docs/assets/getting-started.gif)
+
+> *Tutorial recorded by the rig recording itself: agent runs `doctor.sh`, lists `examples/`, cats a spec. Spec at [`test-runs/tutorial-intro.json`](test-runs/tutorial-intro.json).*
+
 ## Quick start — as a Claude Code plugin
 
 This repo is also a Claude Code plugin. Install it once and the rig becomes available
