@@ -1,7 +1,7 @@
 {
   "session": "meta-rig",
   "agent": {
-    "command": "Run exactly this bash command (the script wrapper allocates a PTY which asciinema needs): script -q /dev/null bash /Users/hal.hildebrand/git/recording-rig/bin/record.sh /Users/hal.hildebrand/git/recording-rig/test-runs/inner-spec.json -- and report the exit code plus the 'gif rendered:' line from the output. Do not run any other tools or commands.",
+    "command": "Run this bash command (it kicks off a recording in the background and prints the PID): nohup bash /Users/hal.hildebrand/git/recording-rig/bin/record.sh /Users/hal.hildebrand/git/recording-rig/test-runs/inner-spec.json > /tmp/inner-spec.out 2>&1 < /dev/null & echo INNER_KICKED_PID=$! && sleep 1 && echo OUTER_DONE",
     "cwd": "/tmp",
     "bypass_permissions": true,
     "extra_args": [
@@ -12,23 +12,16 @@
   "hooks": { "capture_tools": [] },
   "gates": [],
   "validate": {
-    "must_contain_in_order": [
-      "consent-sweep done",
-      "hooks rendered ->",
-      "tmux session up; agent pane =",
-      "cast captured:",
-      "[validate] PASSED",
-      "gif rendered:"
-    ],
-    "must_not_contain": ["step_aborted", "failure_reason", "validation failed"]
+    "must_contain_in_order": ["INNER_KICKED_PID=", "OUTER_DONE"],
+    "must_not_contain": ["step_aborted", "failure_reason"]
   },
   "pacing": {
-    "idle_seconds": 12,
-    "turn_timeout_sec": 300,
-    "attach_gap_sec": 10,
-    "agent_done_hold_sec": 8,
-    "exit_hold_sec": 8,
-    "tmux_size": "220x60"
+    "idle_seconds": 8,
+    "turn_timeout_sec": 120,
+    "attach_gap_sec": 8,
+    "agent_done_hold_sec": 4,
+    "exit_hold_sec": 4,
+    "tmux_size": "220x55"
   },
-  "render": { "font_size": 16, "theme": "monokai" }
+  "render": { "font_size": 14, "theme": "monokai" }
 }

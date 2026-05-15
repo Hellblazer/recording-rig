@@ -1,0 +1,23 @@
+{
+  "session": "probe-bash",
+  "agent": {
+    "command": "Run exactly this bash command and report its complete stdout verbatim: bash -c 'echo INNER-START-X7K; sleep 8; echo INNER-MID-X7K; sleep 8; echo INNER-END-X7K'. Wrap the output between <BEGIN> and <END> markers when you reply.",
+    "cwd": "/tmp",
+    "bypass_permissions": true,
+    "extra_args": ["--model", "sonnet"]
+  },
+  "hooks": { "capture_tools": [] },
+  "gates": [],
+  "validate": {
+    "must_contain_in_order": ["<BEGIN>", "INNER-START-X7K", "INNER-MID-X7K", "INNER-END-X7K", "<END>"]
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 120,
+    "attach_gap_sec": 6,
+    "agent_done_hold_sec": 4,
+    "exit_hold_sec": 4,
+    "tmux_size": "160x40"
+  },
+  "render": { "font_size": 18, "theme": "monokai" }
+}

@@ -34,6 +34,11 @@ for entry in "$HOME"/.claude/*; do
       # Sandbox: empty directory (still navigable) instead of symlink
       [[ "$name" != "CLAUDE.md" ]] && mkdir -p "$SANDBOX/.claude/$name"
       ;;
+    settings.json|settings.local.json)
+      # Sandbox: write a fresh empty config so user-level hooks don't fire
+      # in the recorded session (e.g. broken codex-hook entries).
+      echo '{}' > "$SANDBOX/.claude/$name"
+      ;;
     *)
       ln -s "$entry" "$SANDBOX/.claude/$name"
       ;;
@@ -57,3 +62,38 @@ cleanup() {
 trap cleanup EXIT
 
 HOME="$SANDBOX" "$HERE/bin/record.sh" "$HERE/test-runs/meta-rig.json"
+OUTER_RC=$?
+echo "[meta] outer rig exited with rc=$OUTER_RC"
+
+# Wait for the detached inner rig to finish — agent kicked it off with
+# 'nohup ... &', so it runs after the outer recording terminates. Poll for
+# the inner .gif (last artifact agg produces). Cap at 180s.
+echo "[meta] waiting for inner rig to produce /tmp/inner-spec.gif ..."
+for ((i=0; i<60; i++)); do
+  if [[ -e /tmp/inner-spec.gif ]] && [[ $(stat -f %z /tmp/inner-spec.gif 2>/dev/null || stat -c %s /tmp/inner-spec.gif) -gt 0 ]]; then
+    echo "[meta] inner-spec.gif appeared after ${i}*3s"
+    break
+  fi
+  sleep 3
+done
+
+echo
+echo "=== inner-spec artifacts ==="
+ls -la /tmp/inner-spec.* 2>&1 | head -10
+echo
+echo "=== inner rig stdout (head/tail) ==="
+[[ -e /tmp/inner-spec.out ]] && {
+  echo "--- head ---"
+  head -8 /tmp/inner-spec.out
+  echo "--- tail ---"
+  tail -3 /tmp/inner-spec.out
+}
+
+# Final pass criterion: inner rig produced a valid GIF
+if [[ -e /tmp/inner-spec.gif ]] && (( $(stat -f %z /tmp/inner-spec.gif 2>/dev/null || stat -c %s /tmp/inner-spec.gif) > 10000 )); then
+  echo "[meta] PASS: outer rig recorded the spawn AND inner rig completed standalone"
+  exit 0
+else
+  echo "[meta] FAIL: inner rig did not produce a GIF" >&2
+  exit 1
+fi

@@ -1,0 +1,23 @@
+{
+  "session": "probe-nested",
+  "agent": {
+    "command": "Run exactly this bash command and report the COMPLETE stdout+stderr verbatim wrapped between <BEGIN> and <END> markers. Do not summarize or truncate: bash -c 'timeout 90 bash /Users/hal.hildebrand/git/recording-rig/bin/record.sh /Users/hal.hildebrand/git/recording-rig/test-runs/inner-spec.json 2>&1 | head -40; echo EXITCODE=$?'",
+    "cwd": "/tmp",
+    "bypass_permissions": true,
+    "extra_args": ["--model", "sonnet"]
+  },
+  "hooks": { "capture_tools": [] },
+  "gates": [],
+  "validate": {
+    "must_contain": ["<BEGIN>", "<END>"]
+  },
+  "pacing": {
+    "idle_seconds": 10,
+    "turn_timeout_sec": 240,
+    "attach_gap_sec": 6,
+    "agent_done_hold_sec": 6,
+    "exit_hold_sec": 4,
+    "tmux_size": "200x55"
+  },
+  "render": { "font_size": 14, "theme": "monokai" }
+}

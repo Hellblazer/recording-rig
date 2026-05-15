@@ -1,0 +1,23 @@
+{
+  "session": "probe-script",
+  "agent": {
+    "command": "Run exactly this bash command and report the COMPLETE output verbatim between <BEGIN> and <END> markers: script -q /dev/null bash -c 'echo TOKEN-A-9F2K; sleep 5; echo TOKEN-B-9F2K; sleep 5; echo TOKEN-C-9F2K'",
+    "cwd": "/tmp",
+    "bypass_permissions": true,
+    "extra_args": ["--model", "sonnet"]
+  },
+  "hooks": { "capture_tools": [] },
+  "gates": [],
+  "validate": {
+    "must_contain_in_order": ["<BEGIN>", "TOKEN-A-9F2K", "TOKEN-B-9F2K", "TOKEN-C-9F2K", "<END>"]
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 120,
+    "attach_gap_sec": 6,
+    "agent_done_hold_sec": 4,
+    "exit_hold_sec": 4,
+    "tmux_size": "160x40"
+  },
+  "render": { "font_size": 18, "theme": "monokai" }
+}

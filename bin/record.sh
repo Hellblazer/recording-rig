@@ -11,12 +11,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/sentinels.sh"
 
-# Dedicated tmux socket so the rig (a) doesn't pollute the user's normal
-# tmux server, and (b) can be invoked inside an existing tmux session
-# (e.g. when recording the rig itself). All sub-scripts inherit this override.
-export RIG_TMUX_SOCKET="${RIG_TMUX_SOCKET:-recording-rig}"
-tmux() { command tmux -L "$RIG_TMUX_SOCKET" "$@"; }
-export -f tmux
+# Dedicated tmux socket per session so the rig:
+# (a) doesn't pollute the user's normal tmux server,
+# (b) can be invoked inside an existing tmux session, and
+# (c) survives nested rig invocations (outer + inner pick distinct sockets).
+# Default socket name is "rig-<session>" — uniquely scoped to this run.
+# Override with RIG_TMUX_SOCKET env var if you have a specific reason.
+unset TMUX TMUX_PANE 2>/dev/null || true
 
 # Bash 4+ required (the driver and tmux-session use array idioms / read loops
 # that work on bash 3.2 too, but `read -t`, `wait -n`, and a few other 4+
@@ -26,9 +27,14 @@ if (( BASH_VERSINFO[0] < 4 )); then
   exit 2
 fi
 
-# Resolve session name and validate format.
-SESSION="${SESSION:-$(jq -r '.session // empty' "$SPEC")}"
-if [[ -z "$SESSION" ]]; then
+# Resolve session name. Precedence: spec.session → env SESSION → auto-gen.
+# (Spec MUST win over inherited env so nested invocations — e.g. an outer
+# rig's Bash tool launching this inner rig — don't accidentally reuse the
+# outer's session id from inherited env.)
+SESSION_FROM_SPEC="$(jq -r '.session // empty' "$SPEC")"
+if [[ -n "$SESSION_FROM_SPEC" ]]; then
+  SESSION="$SESSION_FROM_SPEC"
+elif [[ -z "${SESSION:-}" ]]; then
   SESSION="rig-$(date +%Y%m%d-%H%M%S)"
 fi
 if [[ ! "$SESSION" =~ ^[A-Za-z0-9._-]+$ ]]; then
@@ -36,6 +42,13 @@ if [[ ! "$SESSION" =~ ^[A-Za-z0-9._-]+$ ]]; then
   exit 2
 fi
 export SESSION
+
+# Per-session tmux socket. Always derived from THIS run's SESSION — never
+# inherited from the parent process, so nested rigs (outer record.sh →
+# Bash tool → inner record.sh) each get their own isolated tmux server.
+export RIG_TMUX_SOCKET="rig-$SESSION"
+tmux() { command tmux -L "$RIG_TMUX_SOCKET" "$@"; }
+export -f tmux
 
 CAST_OUT="${CAST_OUT:-/tmp/${SESSION}.cast}"
 GIF_OUT="${GIF_OUT:-/tmp/${SESSION}.gif}"
@@ -219,10 +232,17 @@ echo "[rig] tmux session up; agent pane = $AGENT_PANE_ID"
 # sentinel exists and AGENT_DONE_HOLD elapses.
 (
   hold_remaining=""
+  iter=0
   while :; do
     sleep 2
-    alive=$(tmux list-panes -t "$SESSION" -F '#{pane_dead}' 2>/dev/null | grep -c '^0$' || true)
+    iter=$((iter + 1))
+    panes_output=$(tmux list-panes -t "$SESSION" -F '#{pane_dead}' 2>&1)
+    panes_rc=$?
+    alive=$(printf '%s\n' "$panes_output" | grep -c '^0$' 2>/dev/null || true)
+    [[ "${RIG_WATCHER_DEBUG:-0}" == "1" ]] && \
+      echo "[watcher iter=$iter rc=$panes_rc alive=$alive panes_output='${panes_output:0:80}']" >&2
     if [[ "$alive" == "0" ]]; then
+      [[ "${RIG_WATCHER_DEBUG:-0}" == "1" ]] && echo "[watcher BREAK on alive=0]" >&2
       break
     fi
     if sentinel_exists agent-done; then
