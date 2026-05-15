@@ -4,13 +4,29 @@ A reusable, language-agnostic framework for recording deterministic Claude Code 
 tutorials, demos, screencasts, regression fixtures, anything you want repeatable.
 Hook-driven coordination, no TUI scraping. See [`docs/design.md`](docs/design.md) for the rationale.
 
+### Getting started — single-pane
+
 ![getting started](docs/assets/getting-started.gif)
 
-> *Getting started: agent runs `doctor.sh`, lists `examples/`, cats a spec. Spec at [`test-runs/tutorial-intro.json`](test-runs/tutorial-intro.json).*
+> Agent runs `doctor.sh`, lists `examples/`, cats a spec. Spec: [`test-runs/tutorial-intro.json`](test-runs/tutorial-intro.json).
+
+### Gated path — auto-answer `AskUserQuestion`
 
 ![gated path](docs/assets/gated.gif)
 
-> *Gated path: agent calls `AskUserQuestion` with three options ('production', 'staging', 'dev'); the rig auto-answers option 2 via Down + Enter; agent confirms `DEPLOY_TARGET-K7Q=staging`. Provability comes from `must_not_contain` blocking the other two answers. Spec at [`test-runs/tutorial-gated.json`](test-runs/tutorial-gated.json).*
+> Agent calls `AskUserQuestion` with `['production', 'staging', 'dev']`; rig sends `Down + Enter` to pick option 2 (`staging`); agent confirms `DEPLOY_TARGET-K7Q=staging`. `must_not_contain` blocks the other two answers, so the gate-navigation mechanism is provable end-to-end. Spec: [`test-runs/tutorial-gated.json`](test-runs/tutorial-gated.json).
+
+### Two-pane path — companion observer subscribed to a hook sentinel
+
+![two-pane path](docs/assets/two-pane.gif)
+
+> Agent uses Bash to emit `JOB_ID=…`; `PostToolUse[^Bash$]` hook extracts it to a sentinel; companion `node observer.mjs` (right pane) waits on the sentinel, reads `JOB_ID` from env, prints lifecycle ticks. Spec: [`test-runs/tutorial-twopane.json`](test-runs/tutorial-twopane.json); observer: [`test-runs/observer.mjs`](test-runs/observer.mjs).
+
+### Multi-command path — `agent.commands[]` across turns
+
+![multi-command path](docs/assets/multi-command.gif)
+
+> Three sequential prompts; rig deletes `turn-end` before each paste so per-command idle detection works. `must_contain_in_order` enforces strict reply ordering. Spec: [`test-runs/tutorial-multicmd.json`](test-runs/tutorial-multicmd.json).
 
 ## Quick start — as a Claude Code plugin
 

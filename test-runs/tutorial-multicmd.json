@@ -1,0 +1,32 @@
+{
+  "session": "tutorial-multicmd",
+  "agent": {
+    "commands": [
+      "We're recording a multi-command tutorial. Step 1 of 3: compute 144 divided by 12 and reply with exactly one line: STEP1-RESULT=<answer>. Show only that line.",
+      "Step 2 of 3: compute 7 squared (7 times 7) and reply with exactly one line: STEP2-RESULT=<answer>. Show only that line.",
+      "Step 3 of 3: compute 1000 minus 273 and reply with exactly one line: STEP3-RESULT=<answer>. Show only that line, then end."
+    ],
+    "cwd": "/Users/hal.hildebrand/git/recording-rig",
+    "bypass_permissions": true,
+    "extra_args": ["--model", "haiku"]
+  },
+  "hooks": { "capture_tools": [] },
+  "gates": [],
+  "validate": {
+    "must_contain_in_order": [
+      "STEP1-RESULT=12",
+      "STEP2-RESULT=49",
+      "STEP3-RESULT=727"
+    ],
+    "must_not_contain": []
+  },
+  "pacing": {
+    "idle_seconds": 6,
+    "turn_timeout_sec": 120,
+    "attach_gap_sec": 8,
+    "agent_done_hold_sec": 4,
+    "exit_hold_sec": 5,
+    "tmux_size": "180x50"
+  },
+  "render": { "font_size": 18, "theme": "monokai" }
+}

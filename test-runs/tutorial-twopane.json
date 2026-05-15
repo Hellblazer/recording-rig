@@ -1,0 +1,43 @@
+{
+  "session": "tutorial-twopane",
+  "agent": {
+    "command": "We are recording a screencast of a two-pane workflow. You MUST invoke the Bash tool (the recording fails without it). Use Bash to run exactly: bash -c 'printf \"Dispatching job to worker pool...\\n\"; printf \"JOB_ID=deploy-job-7K2Q\\n\"'. After the Bash tool returns, reply with exactly one line: AGT-DISPATCHED-P9F. Do not skip the Bash call. Do not run any other tool.",
+    "cwd": "/tmp",
+    "bypass_permissions": true,
+    "extra_args": ["--model", "sonnet"]
+  },
+  "hooks": {
+    "capture_tools": [
+      {
+        "name": "job-id",
+        "matcher": "^Bash$",
+        "jq": ".stdout | capture(\"JOB_ID=(?<id>[^\\n]+)\") | .id"
+      }
+    ]
+  },
+  "gates": [],
+  "companion": {
+    "command": "node",
+    "args": ["/Users/hal.hildebrand/git/recording-rig/test-runs/observer.mjs"],
+    "wait_for_sentinels": ["job-id"],
+    "env": { "JOB_ID": "$job-id" }
+  },
+  "validate": {
+    "must_contain_in_order": [
+      "[observer] watching JOB_ID=deploy-job-7K2Q",
+      "[observer] tick 1 for deploy-job-7K2Q",
+      "[observer] tick 2 for deploy-job-7K2Q",
+      "[observer] job complete: deploy-job-7K2Q"
+    ],
+    "must_not_contain": ["<unset>"]
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 180,
+    "attach_gap_sec": 8,
+    "agent_done_hold_sec": 8,
+    "exit_hold_sec": 6,
+    "tmux_size": "220x55"
+  },
+  "render": { "font_size": 16, "theme": "monokai" }
+}
