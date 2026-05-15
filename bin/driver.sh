@@ -31,9 +31,10 @@ sleep "$ATTACH_GAP_SEC"
 # Read commands. Backwards-compatible: agent.commands[] wins; agent.command is
 # treated as a one-element list.
 mapfile -t COMMANDS < <(jq -r '
-  if (.agent.commands // empty) | type == "array" then .agent.commands[]
-  elif .agent.command then .agent.command
-  else empty end
+  .agent as $a
+  | if ($a.commands // []) | length > 0 then $a.commands[]
+    elif $a.command then $a.command
+    else empty end
 ' "$SPEC")
 
 if (( ${#COMMANDS[@]} == 0 )); then

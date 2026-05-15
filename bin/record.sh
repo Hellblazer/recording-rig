@@ -67,16 +67,28 @@ fi
 
 echo "[rig] session=$SESSION cast=$CAST_OUT gif=$GIF_OUT"
 
-# Render hooks settings.
+# Refuse to run if the spec path lives in the sentinel glob — sentinel_clear_all
+# would erase it. Same for the rendered-hooks output.
+case "$SPEC" in
+  /tmp/"$SESSION".*)
+    echo "record: spec path $SPEC collides with sentinel glob /tmp/${SESSION}.* — move spec outside /tmp or rename" >&2
+    exit 2
+    ;;
+esac
+
+# Clear stale sentinels BEFORE writing any rig artifacts under /tmp/${SESSION}.*.
+sentinel_clear_all
+
+# Render hooks settings (path lives in the sentinel namespace by design;
+# clearing first keeps the freshly rendered file intact).
 "$HERE/bin/render-hooks.sh" "$SPEC" "$SESSION" "$HOOKS_RENDERED"
 echo "[rig] hooks rendered -> $HOOKS_RENDERED"
 
-# Clear stale sentinels.
-sentinel_clear_all
-
 # Spawn the tmux session (detached).
 "$HERE/bin/tmux-session.sh" "$SPEC" "$HOOKS_RENDERED"
-export TMUX_TARGET="${SESSION}:0.0"
+# Target by bare session name — resolves to the active window's active pane
+# regardless of the user's tmux base-index / pane-base-index settings.
+export TMUX_TARGET="$SESSION"
 echo "[rig] tmux session up at $TMUX_TARGET"
 
 # Watcher: terminates once either (a) all panes are dead, or (b) agent-done
@@ -108,6 +120,7 @@ WATCHER_PID=$!
 # the driver pastes the opening command. Otherwise the first keystroke can land
 # in the pane before asciinema is capturing, and the cast starts mid-flow.
 asciinema rec --overwrite --quiet \
+  --output-format asciicast-v2 \
   --command "tmux attach -t $SESSION" \
   "$CAST_OUT" &
 ASCIINEMA_PID=$!

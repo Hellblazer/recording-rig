@@ -33,7 +33,9 @@ done
 # Kill any prior session of this name.
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
-# Agent pane. -c sets working dir cleanly (no `cd && ...` string-splicing).
+# Agent pane. We target everything by bare session name (= active window's
+# active pane) so the rig is immune to the user's base-index / pane-base-index
+# settings in tmux.conf.
 tmux new-session -d -s "$SESSION" -x "$cols" -y "$rows" \
   -c "$cwd" \
   -e "SESSION=$SESSION" \
@@ -71,7 +73,7 @@ if [[ -n "$companion_cmd" ]]; then
     printf '%s' "$resolve_env"
   } > "$envfile"
 
-  tmux split-window -h -t "$SESSION:0" -c "$cwd" -e "SESSION=$SESSION" \
+  tmux split-window -h -t "$SESSION" -c "$cwd" -e "SESSION=$SESSION" \
     bash -lc ". $(printf '%q' "$envfile") && exec $companion_cmd"
-  tmux select-layout -t "$SESSION:0" even-horizontal
+  tmux select-layout -t "$SESSION" even-horizontal
 fi
