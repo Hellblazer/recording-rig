@@ -1,0 +1,23 @@
+name: version-parity
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert plugin.json version matches tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          expected="${tag#v}"
+          actual="$(jq -r .version .claude-plugin/plugin.json)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error file=.claude-plugin/plugin.json::plugin.json version ($actual) does not match tag ($tag)"
+            exit 1
+          fi
+          echo "OK: plugin.json version $actual matches tag $tag"
