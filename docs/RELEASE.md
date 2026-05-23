@@ -8,21 +8,34 @@ marketplace entry pins to a tag rather than tracking the branch — pushes to
 
 ## Bump and tag (this repo)
 
-1. Bump `.claude-plugin/plugin.json` `version` to the next semver — e.g. `0.1.2`.
-2. Commit on `main`:
+1. Branch off `main`: `git checkout -b release/v0.1.2`.
+2. Bump `.claude-plugin/plugin.json` `version` to the next semver — e.g. `0.1.2`.
+3. Add a `## [0.1.2] — YYYY-MM-DD` entry to `CHANGELOG.md` covering user-visible changes since the last release.
+4. Commit, push, open a PR:
    ```bash
    git commit -am "release: v0.1.2"
-   git push
+   git push -u origin release/v0.1.2
+   gh pr create --title "release: v0.1.2"
    ```
-3. Tag and push:
+5. Merge the PR. On main:
    ```bash
-   git tag v0.1.2
+   git checkout main && git pull
+   git tag -a v0.1.2 -m "release: v0.1.2"
    git push origin v0.1.2
    ```
+6. Watch the workflow: `gh run watch $(gh run list --workflow=version-parity.yml --limit=1 --json databaseId -q '.[0].databaseId')`.
 
-The `version-parity` workflow (`.github/workflows/version-parity.yml`) runs on
-the tag push and fails the tag if `plugin.json` `version` does not match the tag
-(minus the `v` prefix). Bad tags can be re-cut after fixing `plugin.json`.
+Tags are **annotated** (`git tag -a -m`), not lightweight — they carry author,
+date, and a release message that show up in `git log` and on the GitHub release
+page. Lightweight tags (bare `git tag v0.1.2`) skip all of that and can't be
+signed.
+
+The `version-parity` workflow runs:
+- On every PR touching `.claude-plugin/plugin.json` → asserts the manifest is well-formed JSON with a semver-shaped `version`.
+- On push to `main` → same well-formedness check.
+- On `v*` tag push → additionally asserts `plugin.json` `version` matches the tag (minus the `v` prefix).
+
+Bad tags can be re-cut after fixing `plugin.json` (`git tag -d v0.1.2 && git push origin :v0.1.2`, then start over from step 1 on a new release branch).
 
 ## Update the marketplace entry (consuming repo)
 
