@@ -1,0 +1,13 @@
+{
+  "name": "recording-rig-playwright-launch-verify",
+  "version": "0.0.1",
+  "private": true,
+  "description": "RDR-001 P0.5 — verify Playwright >= 1.59.0 can _electron.launch() Claude.app and obtain a firstWindow() handle.",
+  "type": "module",
+  "scripts": {
+    "verify": "node verify.js"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}
