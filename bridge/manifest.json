@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "recording-rig-bridge",
+  "display_name": "Recording Rig Bridge",
+  "version": "0.0.1",
+  "description": "Sentinel-emitter bridge for the recording-rig Desktop backend (RDR-001). The model calls these tools at named beats; each call writes a /tmp/${SESSION}.* sentinel using the same contract as the CLI rig's hooks.",
+  "long_description": "recording-rig-bridge is the coordination primitive for recording-rig's Desktop backend. It exposes four tools the model is instructed to call at named beats: rig_turn_end (turn boundary), rig_checkpoint (named milestone), rig_ask (gate answer from the per-session rig-config side-channel), and rig_emit (arbitrary named sentinel). Each call atomically writes a /tmp/${SESSION}.* sentinel (.partial + rename, no trailing newline) and appends to a JSONL transcript, byte-identical to the CLI rig's hook contract. This bundle is the Phase 1 SKELETON: tools are declared and dispatched with stub returns; sentinel writes, session resolution, and gate answers land in later beads. Tool names use underscores (rig_turn_end, not the RDR's prose form rig.turn_end) because dotted names collide with Claude's tool-namespacing (observed in RDR-001 P0.1).",
+  "author": {
+    "name": "Hellblazer",
+    "url": "https://github.com/Hellblazer"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hellblazer/recording-rig"
+  },
+  "homepage": "https://github.com/Hellblazer/recording-rig",
+  "license": "MIT",
+  "keywords": ["recording-rig", "rdr-001", "bridge", "sentinel", "desktop-backend"],
+  "server": {
+    "type": "node",
+    "entry_point": "server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server.js"]
+    }
+  },
+  "tools": [
+    { "name": "rig_turn_end", "description": "Signal the end of the current turn. recording-rig waits on this sentinel to advance. (RDR prose: rig.turn_end)" },
+    { "name": "rig_checkpoint", "description": "Mark a named checkpoint the recording asserts on. Arg: name. (RDR prose: rig.checkpoint)" },
+    { "name": "rig_ask", "description": "Request the gate answer for an AskUserQuestion-style choice; returns the spec-dictated answer_index. Arg: options[]. (RDR prose: rig.ask)" },
+    { "name": "rig_emit", "description": "Emit an arbitrary named sentinel with an optional payload. Args: name, payload. (RDR prose: rig.emit)" }
+  ],
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "node": ">=16.0.0"
+    }
+  }
+}
