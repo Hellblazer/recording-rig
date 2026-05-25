@@ -1,0 +1,8 @@
+{
+  "surfaces": {
+    "chat": {
+      "navButton": { "role": "AXButton", "description": "Chat" },
+      "composer": { "role": "AXTextArea", "description": "Write your prompt to Claude" }
+    }
+  }
+}
