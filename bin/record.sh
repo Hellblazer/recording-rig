@@ -370,7 +370,8 @@ if [[ "$BACKEND" == "desktop" ]]; then
 
   # Soft-miss aggregation: one entry per desktop run (rr-2pp.4.2). Desktop-only —
   # the CLI path stays byte-identical (rr-2pp.4.4).
-  SURFACE=$(jq -r '.desktop.surface // "chat"' "$SPEC" || echo "chat")
+  # surface is a TOP-LEVEL spec field (matches SpecReader.swift; desktop-chat.json).
+  SURFACE=$(jq -r '.surface // "chat"' "$SPEC" || echo "chat")
   quality_log_append "$(jq -nc \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
     --arg session "$SESSION" \

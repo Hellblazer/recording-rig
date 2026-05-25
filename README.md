@@ -165,6 +165,68 @@ Only `agent.command` or `agent.commands[0]` is required; everything else has san
 Preflight (in `record.sh`) rejects: bad SESSION characters, missing commands, and any
 `companion.env` `$sentinel` reference not listed in `companion.wait_for_sentinels`.
 
+### Desktop backend (`backend: "desktop"`)
+
+macOS only. Instead of driving the `claude` CLI inside tmux, the desktop backend
+AX-drives the **Claude Desktop** app (an isolated `Claude-Rig` profile) and captures the
+window with ScreenCaptureKit. The model calls back through the bundled MCP **bridge**
+(`rig_checkpoint` / `rig_turn_end` / `rig_ask` / `rig_emit`), which writes the sentinels
+and a transcript; there is no asciinema cast. Requires the bridge `.mcpb` installed **and
+enabled** in the `Claude-Rig` profile (see `docs/design.md`).
+
+```jsonc
+{
+  "backend": "desktop",                // "cli" (default) | "desktop"
+  "surface": "chat",                   // TOP-LEVEL. which Desktop surface to drive.
+                                       //   "chat" today; "code"/"cowork" are Phase 4.
+  "session": "rig-example-desktop-chat",
+  "agent": { "command": "Reply with a one-sentence friendly greeting." },
+
+  // Prepended to the FIRST command pasted into the composer — Claude.app has no
+  // system-prompt CLI flag, so this is how the model learns to call the rig tools.
+  // Use a plain "please use these tools" request; a "you are being recorded" framing
+  // trips the model's injection-resistance and it refuses (see docs/design.md).
+  "system_prompt_prologue": "Please use these tools as you work: right after you write your greeting, call rig_checkpoint with name \"greeted\"; then, as your final step, call rig_turn_end.",
+
+  "desktop": {
+    "checkpoints": [                   // named rig_checkpoint calls to assert in the transcript
+      { "name": "greeted", "required": true }   // required:true ⇒ must appear, in this order,
+    ]                                            //   or validation FAILs and no GIF renders
+  },
+
+  "validate": {
+    // For desktop, must_contain / must_contain_in_order / must_not_contain run against the
+    // raw bridge-transcript JSONL (structured tool calls), NOT a rendered cast. The desktop
+    // branch ALSO asserts every required checkpoint appears in order and the last call is
+    // rig_turn_end. must_not_contain defaults to empty for desktop (the CLI terminal-error
+    // markers don't map to the transcript).
+    "must_contain": ["greeted"],
+    "must_not_contain": []
+  },
+
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 120,           // if the model skips rig_turn_end, record.sh synthesizes
+                                       //   a fallback after this (a "soft miss"; logged for trend)
+    "attach_gap_sec": 15,              // larger than CLI: wait for the cold app launch + attach
+    "exit_hold_sec": 8,
+    "tmux_size": "1280x800"            // reused as the recording WxH (W×H pixels)
+  }
+}
+```
+
+Desktop-specific behavior:
+
+- **Artifacts**: `/tmp/${SESSION}.mov` (raw capture) → `.mp4` + `.gif` (rendered on validate-pass
+  via `bin/render-webm.sh`), plus `/tmp/${SESSION}.bridge-transcript.jsonl`.
+- **Soft miss**: if the model produces output but never calls `rig_turn_end`, the run still
+  completes (synthesized fallback + GIF) and is recorded in
+  `~/Library/Application Support/recording-rig/quality.jsonl`. `bin/doctor.sh` warns when the
+  soft-miss rate exceeds 20% over the last 20 desktop runs (instruction drift).
+- **`gates[]`** work as in CLI, answered via the bridge's `rig_ask`.
+- **Diagnose**: `/recording-rig:diagnose <session> [spec]` runs `bin/diagnose-desktop.sh` —
+  checkpoint coverage, soft-miss trend, capture coverage, and bridge-log liveness.
+
 ## Architecture
 
 ```
@@ -186,7 +248,12 @@ record.sh                                              // entry point
 ## Prerequisites
 
 `tmux`, `jq`, `asciinema`, `agg`, the `claude` CLI logged in, Node 20+ (for the validator).
-Plus whatever your tutorial's own stack needs.
+Plus whatever your tutorial's own stack needs. Run `bin/doctor.sh` to verify.
+
+The **desktop backend** additionally needs (macOS): `ffmpeg` (render), `swiftc` (builds
+`bin/desktop-driver`), the Claude Desktop app, the bridge `.mcpb` installed + enabled in the
+`Claude-Rig` profile, and Accessibility + Screen Recording permission. `gifski` is optional
+(higher-quality GIFs). `bin/doctor.sh` checks all of these.
 
 ## See also
 
@@ -194,3 +261,4 @@ Plus whatever your tutorial's own stack needs.
 - `examples/single-pane.json` — minimal one-pane tutorial.
 - `examples/two-pane.json` — lockstep agent + companion.
 - `examples/gated.json` — `AskUserQuestion` gates.
+- `examples/desktop-chat.json` — desktop backend (Chat surface) with a required checkpoint.
