@@ -15,6 +15,8 @@ command -v swift >/dev/null 2>&1 || { echo "build-desktop-driver: swift not foun
 echo "[build-desktop-driver] swift build -c release ($PKG)"
 swift build --package-path "$PKG" -c release
 
+# --show-bin-path only resolves + prints the bin dir; it does NOT recompile (the
+# build above already did), so this second invocation is cheap.
 PRODUCT="$(swift build --package-path "$PKG" -c release --show-bin-path)/desktop-driver"
 [[ -x "$PRODUCT" ]] || { echo "build-desktop-driver: product not found at $PRODUCT" >&2; exit 1; }
 

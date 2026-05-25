@@ -25,6 +25,10 @@ public struct WaitForStable {
     /// Re-arm then probe, repeating every `poll` seconds until `probe` returns a
     /// value or `timeout` seconds elapse (then throw `.timeout`). `rearm` runs
     /// before each probe (re-set `AXManualAccessibility` in the live path).
+    ///
+    /// `timeout` must be positive. The element is always probed at least once
+    /// (before the deadline check), so `timeout <= 0` means "probe exactly once,
+    /// then throw if absent" — NOT an infinite wait.
     public func wait<T>(
         label: String,
         timeout: Double,
