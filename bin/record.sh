@@ -43,6 +43,14 @@ if [[ ! "$SESSION" =~ ^[A-Za-z0-9._-]+$ ]]; then
 fi
 export SESSION
 
+# Backend selection (rr-2pp.3.3): cli (default, tmux+asciinema) or desktop
+# (Claude.app via AX + ScreenCaptureKit, macOS only). The CLI path is unchanged.
+BACKEND=$(jq -r '.backend // "cli"' "$SPEC")
+case "$BACKEND" in
+  cli|desktop) ;;
+  *) echo "record: backend must be 'cli' or 'desktop' — got: $BACKEND" >&2; exit 2 ;;
+esac
+
 # Per-session tmux socket. Always derived from THIS run's SESSION — never
 # inherited from the parent process, so nested rigs (outer record.sh →
 # Bash tool → inner record.sh) each get their own isolated tmux server.
@@ -53,6 +61,12 @@ export -f tmux
 CAST_OUT="${CAST_OUT:-/tmp/${SESSION}.cast}"
 GIF_OUT="${GIF_OUT:-/tmp/${SESSION}.gif}"
 HOOKS_RENDERED="/tmp/${SESSION}.hooks.json"
+# Desktop backend artifacts (the bridge writes the transcript; the driver the .mov).
+ACTIVE_SESSION="/tmp/recording-rig.active-session"
+RIG_CONFIG_OUT="/tmp/${SESSION}.rig-config.json"
+MOV_OUT="/tmp/${SESSION}.mov"
+MP4_OUT="/tmp/${SESSION}.mp4"
+TRANSCRIPT_OUT="/tmp/${SESSION}.bridge-transcript.jsonl"
 
 IDLE_SECONDS=$(jq -r '.pacing.idle_seconds // 8' "$SPEC")
 EXIT_HOLD=$(jq -r '.pacing.exit_hold_sec // 8' "$SPEC")
@@ -71,10 +85,35 @@ AGG_THEME=$(jq -r '.render.theme // "monokai"' "$SPEC")
 
 export IDLE_SECONDS ATTACH_GAP_SEC TURN_TIMEOUT_SEC SESSION_MAX_SEC
 
-# Preflight: tools.
-for bin in tmux jq asciinema agg claude node; do
-  command -v "$bin" >/dev/null || { echo "missing prereq: $bin" >&2; exit 2; }
-done
+# Preflight: tools (backend-specific — desktop doesn't need tmux/asciinema/agg/claude).
+if [[ "$BACKEND" == "cli" ]]; then
+  for bin in tmux jq asciinema agg claude node; do
+    command -v "$bin" >/dev/null || { echo "missing prereq: $bin" >&2; exit 2; }
+  done
+else
+  for bin in jq node ffmpeg; do
+    command -v "$bin" >/dev/null || { echo "missing prereq: $bin" >&2; exit 2; }
+  done
+  [[ -x "$HERE/bin/desktop-driver" ]] || {
+    echo "record: bin/desktop-driver missing — build it: bin/build-desktop-driver.sh" >&2; exit 2; }
+  # Fail BEFORE launching the app if the driver's selectors file is absent (else
+  # record.sh open -n's Claude-Rig and the driver only then dies at config load).
+  [[ -f "$HERE/bin/desktop-ax-selectors.json" ]] || {
+    echo "record: bin/desktop-ax-selectors.json missing" >&2; exit 2; }
+  # render-webm is the post-capture render — checked here so a missing tool fails
+  # before the recording runs, not after (review rr-2pp.3.3 #1).
+  [[ -x "$HERE/bin/render-webm.sh" ]] || {
+    echo "record: bin/render-webm.sh missing (rr-2pp.3.2)" >&2; exit 2; }
+  # Every gate's for_command (when present) must name a real command, else the
+  # bridge would silently match ANY command (scope-broadening). Fail loud.
+  bad_fc=$(jq -r '
+    ( .agent.commands // (if .agent.command then [.agent.command] else [] end) ) as $cmds
+    | [ (.gates // [])[] | .for_command | select(. != null) | . as $fc | select(($cmds | index($fc)) == null) ]
+    | join(", ")
+  ' "$SPEC")
+  [[ -z "$bad_fc" ]] || {
+    echo "record: gates[].for_command references unknown command(s): $bad_fc" >&2; exit 2; }
+fi
 
 # Preflight: spec sanity.
 if ! jq -e '(.agent.command // (.agent.commands // [])[0]) | strings | length > 0' "$SPEC" >/dev/null; then
@@ -130,11 +169,17 @@ esac
 ASCIINEMA_PID=""
 DRIVER_PID=""
 WATCHER_PID=""
+RIG_PID=""
 cleanup() {
   local rc=$?
   for pid in "$DRIVER_PID" "$ASCIINEMA_PID" "$WATCHER_PID"; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   done
+  # Desktop teardown: quit the Claude-Rig instance with SIGTERM (graceful — NEVER
+  # SIGKILL/-9, which loses the install flush, P0.1) and unlink the active-session
+  # pointer. No-ops for the CLI backend (RIG_PID empty, pointer absent).
+  [[ -n "$RIG_PID" ]] && kill -TERM "$RIG_PID" 2>/dev/null || true
+  rm -f "$ACTIVE_SESSION" 2>/dev/null || true
   # Kill the whole tmux server for this session's dedicated socket and
   # remove the socket file. Each rig run gets its own socket
   # (rig-<session>), so this is always safe — we never touch the user's
@@ -202,21 +247,105 @@ consent_sweep() {
   echo "[rig] consent-sweep done (legal=$accepted_legal trust=$accepted_trust)"
 }
 
-# Refuse if another rig run owns this SESSION's tmux session. tmux-session.sh
-# would otherwise kill-session the live one, corrupting both runs. Check
-# BEFORE the consent sweep so a conflicting session aborts cheaply.
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-  echo "record: tmux session '$SESSION' already exists — another rig instance may be running" >&2
-  echo "  (kill it with: tmux kill-session -t $SESSION)" >&2
+# Refuse if another rig run owns this session. CLI: tmux-session.sh would
+# kill-session the live one, corrupting both runs. Desktop: the GLOBAL
+# active-session pointer can only name one run at a time. Check BEFORE the
+# consent sweep so a conflict aborts cheaply.
+if [[ "$BACKEND" == "cli" ]]; then
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "record: tmux session '$SESSION' already exists — another rig instance may be running" >&2
+    echo "  (kill it with: tmux kill-session -t $SESSION)" >&2
+    exit 2
+  fi
+elif [[ -e "$ACTIVE_SESSION" ]]; then
+  echo "record: $ACTIVE_SESSION exists — another desktop rig may be running" >&2
+  echo "  (remove it with: rm -f $ACTIVE_SESSION)" >&2
   exit 2
 fi
 
-if [[ "${SKIP_CONSENT_SWEEP:-0}" != "1" ]]; then
+# Consent sweep is CLI-only: it warms up the `claude` CLI first-run dialogs. The
+# desktop Claude.app profile is logged in once, out of band.
+if [[ "$BACKEND" == "cli" && "${SKIP_CONSENT_SWEEP:-0}" != "1" ]]; then
   consent_sweep
 fi
 
 # Clear stale sentinels BEFORE writing rig artifacts under /tmp/${SESSION}.*.
 sentinel_clear_all
+
+# --- Desktop backend (macOS): Claude.app via AX + ScreenCaptureKit. record.sh
+# owns the launch, the active-session/rig-config writes, and the turn-end watch;
+# bin/desktop-driver owns AX-drive + capture. RUNTIME-GATED by rr-2pp.3.6 — the
+# Electron PID resolution + app lifecycle here are validated against the live
+# Claude-Rig. Runs and exits before the (unchanged) CLI flow below.
+if [[ "$BACKEND" == "desktop" ]]; then
+  CLAUDE_RIG_DIR="$HOME/Library/Application Support/Claude-Rig"
+
+  # rig-config: translate each gate's for_command (a command STRING in specs /
+  # bin/driver.sh) to the INTEGER command index the bridge expects (bridge/
+  # server.js); omit when absent (matches any command). Atomic .partial+rename.
+  jq -c --arg sess "$SESSION" '
+    ( .agent.commands // (if .agent.command then [.agent.command] else [] end) ) as $cmds
+    | { session: $sess,
+        gates: [ (.gates // [])[]
+          | (.for_command // null) as $fc
+          | { answer_index: (.answer_index // 1) }
+            + ( if $fc == null then {}
+                else ($cmds | index($fc)) as $i
+                     | (if $i == null then {} else { for_command: $i } end)
+                end ) ] }
+  ' "$SPEC" > "${RIG_CONFIG_OUT}.partial"
+  mv "${RIG_CONFIG_OUT}.partial" "$RIG_CONFIG_OUT"
+
+  # active-session pointer: single-line id, NO trailing newline; atomic.
+  printf '%s' "$SESSION" > "${ACTIVE_SESSION}.partial"
+  mv "${ACTIVE_SESSION}.partial" "$ACTIVE_SESSION"
+  echo "[rig] desktop: active-session=$SESSION rig-config=$RIG_CONFIG_OUT"
+
+  # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
+  open -n -a Claude --args \
+    --user-data-dir="$CLAUDE_RIG_DIR" \
+    --force-renderer-accessibility
+  sleep "$ATTACH_GAP_SEC"
+
+  # Resolve the Claude-Rig MAIN pid: it carries --user-data-dir=<rig> but not
+  # --type= (Electron helpers do). RUNTIME-WATCH (rr-2pp.3.6): confirm this is
+  # the AX-attachable main process, not a helper.
+  RIG_PID=""
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    if ! ps -o command= -p "$p" 2>/dev/null | grep -q -- "--type="; then
+      RIG_PID="$p"; break
+    fi
+  done < <(pgrep -f -- "--user-data-dir=$CLAUDE_RIG_DIR" 2>/dev/null || true)
+  [[ -n "$RIG_PID" ]] || { echo "record: could not resolve Claude-Rig pid" >&2; exit 1; }
+  echo "[rig] desktop: Claude-Rig pid=$RIG_PID"
+
+  # Driver: AX-drive + capture. Writes prompt-submitted + the .mov; waits on
+  # agent-done (written below) to stop + finishWriting().
+  "$HERE/bin/desktop-driver" --pid "$RIG_PID" --spec "$SPEC" &
+  DRIVER_PID=$!
+
+  # record.sh owns the turn-end watch (same ceilings as the CLI driver).
+  if ! sentinel_wait_idle "$IDLE_SECONDS" "$TURN_TIMEOUT_SEC" "$SESSION_MAX_SEC"; then
+    echo "record: desktop idle-wait did not settle cleanly" >&2
+  fi
+  touch "$(sentinel_path agent-done)"   # signal the driver to flush + exit
+  wait "$DRIVER_PID" 2>/dev/null || true
+  DRIVER_PID=""
+  echo "[rig] desktop: capture complete -> $MOV_OUT"
+
+  # Validate (transcript primary) then render .mp4 + .gif, gated on PASS.
+  if node "$HERE/bin/validate.mjs" "$SPEC" "$TRANSCRIPT_OUT" "$MOV_OUT"; then
+    if [[ "${SKIP_GIF:-0}" != "1" ]]; then
+      "$HERE/bin/render-webm.sh" "$MOV_OUT" "$MP4_OUT" "$GIF_OUT"
+      echo "[rig] desktop: rendered $GIF_OUT + $MP4_OUT"
+    fi
+  else
+    echo "[rig] validation failed; refusing to render (override with SKIP_VALIDATE=1)" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 # Render hooks.
 "$HERE/bin/render-hooks.sh" "$SPEC" "$SESSION" "$HOOKS_RENDERED"
