@@ -1,11 +1,18 @@
 ---
 name: diagnose
-description: Diagnose a failed recording-rig run. Use when the user reports a recording failed, the validator said FAILED, the rig hung, the cast looks wrong, or invokes `/recording-rig:diagnose`. Examines the cast, sentinels under /tmp/${SESSION}.*, rendered hooks file, and rig output to identify the failure mode and propose a fix.
+description: Diagnose a failed recording-rig run (CLI or desktop backend). Use when the user reports a recording failed, the validator said FAILED, the rig hung, the cast/GIF looks wrong, the desktop model skipped its rig tools, or invokes `/recording-rig:diagnose`. Examines the cast (CLI) or bridge transcript + .mov + bridge log (desktop), sentinels under /tmp/${SESSION}.*, rendered hooks, and rig output to identify the failure mode and propose a fix.
 ---
 
 # diagnose
 
 Identify why a recording failed and propose a specific fix. This is targeted forensics on a known-bad run — not a general "review my spec" tool.
+
+## First: which backend?
+
+The two backends fail differently and have different artifacts. Detect the backend before walking any taxonomy:
+
+- **`backend: "desktop"`** in the spec, or a `/tmp/${SESSION}.bridge-transcript.jsonl` exists → **desktop**. Jump to [Desktop backend forensics](#desktop-backend-forensics).
+- Otherwise (a `/tmp/${SESSION}.cast` exists, no transcript) → **CLI**. Walk the CLI taxonomy below.
 
 ## When to use
 
@@ -71,6 +78,40 @@ The agent is stuck mid-turn. Causes:
 ### `must_contain_in_order` failed at an unexpected position
 
 The cleaned cast probably has the strings, but in a different order. Cursor-overwrite or claude printing summaries can reorder visible text. Switch to plain `must_contain` if order is incidental.
+
+## Desktop backend forensics
+
+For a `backend: "desktop"` run there is no cast — the primary inputs are the bridge transcript, the `.mov`, and the bridge's per-server log. Gather them all at once:
+
+```bash
+bin/diagnose-desktop.sh ${SESSION} ${SPEC}    # SPEC optional but enables checkpoint coverage
+```
+
+The helper is read-only and emits four sections. Interpret them against the desktop failure modes:
+
+### (a) checkpoint coverage
+
+- **`MISSING REQUIRED: <name>`** — the model never called `rig_checkpoint` for a required checkpoint. The validator FAILs and no GIF renders. This is a model-cooperation failure, not a rig bug: strengthen the `system_prompt_prologue` wording (see `examples/desktop-chat.json` — a plain "please use these tools" framing; a "you are being recorded" framing triggers injection-refusal) and re-record.
+- **`turn_end: ABSENT`** — the turn never closed and record.sh did not synthesize a fallback (the transcript was empty at timeout → bridge never reached; see (d)).
+- **`turn_end: present (synthesized)`** — a **soft miss**: the model produced output but skipped `rig_turn_end`, so record.sh synthesized the fallback (the run still produced a GIF). One soft miss is tolerable; a trend is not — see (b).
+- **`turn_end: present (genuine)`** — the model closed the turn itself (healthy).
+
+### (b) soft-miss trend
+
+`rate: N% over last M desktop runs`. Above 20% (with ≥3 samples) the helper prints an instruction-drift verdict: the prologue is not reliably steering the model. Strengthen it, or accept that this surface/Desktop-version combo has hit its determinism floor (RDR-001 Risk "instruction drift"). `this-session:` shows whether *this* run was a soft miss.
+
+### (c) capture coverage
+
+- **`verdict: NO CAPTURE`** — no `.mov`. The ScreenCaptureKit → AVAssetWriter path failed: check Screen Recording permission (System Settings → Privacy & Security) and `bin/doctor.sh`.
+- **`verdict: CAPTURE EMPTY` / `CAPTURE GAP`** — the `.mov` is ~0s or shorter than the tool-call span; the capture stopped before the turn finished (driver crash, early `agent-done`, or a permission revoked mid-run).
+- **`verdict: ok`** — the `.mov` brackets the tool-call span (healthy).
+
+### (d) bridge-log liveness
+
+- **`status: NOT FOUND`** — the bridge never connected **in the Claude-Rig profile**. The most common cause: the `.mcpb` is installed/enabled in the *primary* profile, not Claude-Rig (the `open *.mcpb` → default-handler footgun). Re-install + enable in Claude-Rig (Connectors UI), then re-record.
+- **`status: present`** but the log went quiet long before the session ended → the bridge may have crashed mid-session (001-research-20). The log is a coarse transport-lifecycle signal only, not a turn-end source.
+
+HAR / Playwright-trace forensics do not exist for the desktop backend — there is no CDP transport under the AX pivot. Do not look for them.
 
 ## Reporting
 
