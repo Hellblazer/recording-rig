@@ -10,6 +10,8 @@ SPEC="$(cd "$(dirname "$SPEC_ARG")" && pwd)/$(basename "$SPEC_ARG")"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$HERE/lib/sentinels.sh"
+# shellcheck disable=SC1091
+source "$HERE/lib/quality.sh"
 
 # Dedicated tmux socket per session so the rig:
 # (a) doesn't pollute the user's normal tmux server,
@@ -326,16 +328,62 @@ if [[ "$BACKEND" == "desktop" ]]; then
   DRIVER_PID=$!
 
   # record.sh owns the turn-end watch (same ceilings as the CLI driver).
-  if ! sentinel_wait_idle "$IDLE_SECONDS" "$TURN_TIMEOUT_SEC" "$SESSION_MAX_SEC"; then
-    echo "record: desktop idle-wait did not settle cleanly" >&2
+  # Capture the return code without tripping `set -e` (rc 2 = soft miss).
+  IDLE_RC=0
+  sentinel_wait_idle "$IDLE_SECONDS" "$TURN_TIMEOUT_SEC" "$SESSION_MAX_SEC" || IDLE_RC=$?
+  # rc 2 = pacing.turn_timeout_sec elapsed with no turn-end progress. If the
+  # model still produced output (transcript has entries), this is a soft miss:
+  # synthesize a fallback rig_turn_end so the recording COMPLETES (GIF +
+  # warning) instead of hard-failing, and flag it for the quality log. An empty
+  # transcript means the bridge was never reached — a hard miss the validator
+  # reports; we do not synthesize it into a false pass. (RDR-001 Risk
+  # "instruction drift".)
+  # rc 0 = turn-end sentinel existed and was idle for $IDLE_SECONDS; in the
+  # desktop backend ONLY bridge/server.js writes that sentinel (on a rig_turn_end
+  # call), so rc 0 implies the model closed the turn itself — never a soft miss.
+  SOFT_MISS=0
+  if (( IDLE_RC == 2 )) && [[ -s "$TRANSCRIPT_OUT" ]]; then
+    SOFT_MISS=1
+    # Synthesis is best-effort: a failure here must NOT abort the run (the EXIT
+    # trap would then SIGTERM the driver mid-flush). Let it fall through to
+    # validate — which fails on the missing turn-end and refuses the GIF — while
+    # still logging the soft miss below.
+    if quality_synthesize_turn_end "$TRANSCRIPT_OUT" "$SESSION"; then
+      echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; synthesized fallback turn-end" >&2
+    else
+      echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; fallback synthesis FAILED" >&2
+    fi
+  elif (( IDLE_RC != 0 )); then
+    echo "record: desktop idle-wait did not settle cleanly (rc=$IDLE_RC)" >&2
   fi
   touch "$(sentinel_path agent-done)"   # signal the driver to flush + exit
   wait "$DRIVER_PID" 2>/dev/null || true
   DRIVER_PID=""
   echo "[rig] desktop: capture complete -> $MOV_OUT"
 
-  # Validate (transcript primary) then render .mp4 + .gif, gated on PASS.
+  # Validate (transcript primary). Capture the verdict BEFORE branching so every
+  # desktop run lands one quality.jsonl entry (pass or fail) for soft-miss trend.
+  VALIDATE_PASS=0
   if node "$HERE/bin/validate.mjs" "$SPEC" "$TRANSCRIPT_OUT" "$MOV_OUT"; then
+    VALIDATE_PASS=1
+  fi
+
+  # Soft-miss aggregation: one entry per desktop run (rr-2pp.4.2). Desktop-only —
+  # the CLI path stays byte-identical (rr-2pp.4.4).
+  SURFACE=$(jq -r '.desktop.surface // "chat"' "$SPEC" || echo "chat")
+  quality_log_append "$(jq -nc \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
+    --arg session "$SESSION" \
+    --arg spec "$SPEC" \
+    --arg surface "$SURFACE" \
+    --argjson soft_miss "$SOFT_MISS" \
+    --argjson validate_pass "$VALIDATE_PASS" \
+    --argjson idle_rc "$IDLE_RC" \
+    '{ts:$ts, session:$session, spec:$spec, backend:"desktop", surface:$surface,
+      soft_miss:($soft_miss==1), validate_pass:($validate_pass==1), idle_rc:$idle_rc}')"
+
+  # Render .mp4 + .gif, gated on PASS (a soft miss that validated still renders).
+  if (( VALIDATE_PASS )); then
     if [[ "${SKIP_GIF:-0}" != "1" ]]; then
       "$HERE/bin/render-webm.sh" "$MOV_OUT" "$MP4_OUT" "$GIF_OUT"
       echo "[rig] desktop: rendered $GIF_OUT + $MP4_OUT"
