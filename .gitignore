@@ -15,3 +15,7 @@ node_modules/
 
 # Packed MCPB build artifacts (source under probes/<name>/; rebuilt via `npx -y @anthropic-ai/mcpb pack`)
 *.mcpb
+
+# Swift desktop-driver build artifacts (source under desktop-driver/; rebuilt via bin/build-desktop-driver.sh)
+desktop-driver/.build/
+/bin/desktop-driver
