@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1360" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#1a1a1a" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arw" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#6b6b62"/>
+    </marker>
+    <style>
+      text { fill:#2b2b27; }
+      .title  { font-size:18px; font-weight:700; fill:#1d1d1a; }
+      .sub    { font-size:12.5px; fill:#6b6b62; }
+      .bt     { font-size:14.5px; font-weight:650; }
+      .bd     { font-size:12.5px; fill:#34342f; }
+      .cap    { font-size:11px; fill:#7a7a70; }
+      .mono   { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; fill:#3a3a34; }
+      .elbl   { font-size:11px; fill:#7a7a70; font-style:italic; }
+      .edge   { stroke:#6b6b62; stroke-width:1.6; fill:none; }
+      .chip   { fill:#ffffff; stroke:#9bb6d4; stroke-width:1.3; }
+    </style>
+  </defs>
+
+  <text x="40" y="44" class="title">RDR-001 — Desktop backend architecture</text>
+  <text x="40" y="66" class="sub">Additive to the CLI backend · selected per spec field  backend: "cli" | "desktop"  (default "cli")</text>
+
+  <!-- ============ main vertical spine (x-centre 460, boxes 300..620) ============ -->
+
+  <!-- 1. dispatcher -->
+  <g filter="url(#sh)">
+    <rect x="300" y="98" width="320" height="62" rx="10" fill="#eef0f9" stroke="#4f5d99" stroke-width="2"/>
+  </g>
+  <text x="460" y="126" text-anchor="middle" class="bt" fill="#3a4680">record.sh</text>
+  <text x="460" y="146" text-anchor="middle" class="cap">backend dispatcher · CLI is default</text>
+
+  <!-- 2. orchestration -->
+  <g filter="url(#sh)">
+    <rect x="300" y="226" width="320" height="104" rx="10" fill="#eef0f9" stroke="#4f5d99" stroke-width="2"/>
+  </g>
+  <text x="320" y="252" class="bt" fill="#3a4680">record.sh — orchestration</text>
+  <text x="320" y="275" class="bd">SESSION · spec · sentinel watch ·</text>
+  <text x="320" y="293" class="bd">active-session pointer</text>
+  <text x="320" y="316" class="mono">open -n -a Claude  --user-data-dir=Claude-Rig</text>
+
+  <!-- 3. swift driver (new) -->
+  <g filter="url(#sh)">
+    <rect x="300" y="396" width="320" height="158" rx="10" fill="#e6f4f1" stroke="#2f8f83" stroke-width="2"/>
+  </g>
+  <text x="320" y="422" class="bt" fill="#1f6b61">bin/desktop-driver · Swift</text>
+  <rect x="520" y="408" width="86" height="19" rx="9.5" fill="#2f8f83"/>
+  <text x="563" y="421" text-anchor="middle" font-size="10.5" font-weight="600" fill="#ffffff">new revision</text>
+  <text x="320" y="448" class="bd">attach AX · AXManualAccessibility (hold)</text>
+  <text x="320" y="470" class="bd">nav — AXPress on named buttons</text>
+  <text x="320" y="492" class="bd">input — AXValue set + postToPid Return</text>
+  <text x="320" y="514" class="bd">window — kAXSizeAttribute</text>
+  <text x="320" y="536" class="bd">capture — ScreenCaptureKit</text>
+
+  <!-- 4. Claude.app -->
+  <g filter="url(#sh)">
+    <rect x="280" y="620" width="360" height="150" rx="10" fill="#eaf2fa" stroke="#4a7fb5" stroke-width="2"/>
+  </g>
+  <text x="300" y="646" class="bt" fill="#355f8a">Claude.app — Claude-Rig profile</text>
+  <rect class="chip" x="300" y="662" width="100" height="46" rx="8"/>
+  <text x="350" y="683" text-anchor="middle" class="bd">Chat</text>
+  <text x="350" y="699" text-anchor="middle" class="cap">cloud model</text>
+  <rect class="chip" x="410" y="662" width="100" height="46" rx="8"/>
+  <text x="460" y="683" text-anchor="middle" class="bd">Code</text>
+  <text x="460" y="699" text-anchor="middle" class="cap">host model</text>
+  <rect class="chip" x="520" y="662" width="100" height="46" rx="8"/>
+  <text x="570" y="683" text-anchor="middle" class="bd">CoWork</text>
+  <text x="570" y="699" text-anchor="middle" class="cap">Linux VM · vsock</text>
+  <text x="300" y="730" class="cap">Electron · isolated profile · a11y tree via AXManualAccessibility</text>
+  <text x="300" y="748" class="cap">SCK captures this window's compositor output by windowID</text>
+
+  <!-- 5. bridge -->
+  <g filter="url(#sh)">
+    <rect x="280" y="836" width="360" height="132" rx="10" fill="#e9f3ec" stroke="#5a9367" stroke-width="2"/>
+  </g>
+  <text x="300" y="862" class="bt" fill="#3f6e4a">recording-rig-bridge.mcpb</text>
+  <text x="300" y="884" class="cap">permanent in Claude-Rig · runs on the macOS host</text>
+  <text x="300" y="910" class="mono">rig.turn_end()   rig.checkpoint(name)</text>
+  <text x="300" y="930" class="mono">rig.ask(options)→index   rig.emit(name, payload)</text>
+  <text x="300" y="954" class="cap">reads rig-config · writes /tmp/&lt;sess&gt;.* sentinels · logs transcript</text>
+
+  <!-- 6. sentinels -->
+  <g filter="url(#sh)">
+    <rect x="330" y="1034" width="260" height="58" rx="10" fill="#f0efe9" stroke="#9a9a90" stroke-width="2"/>
+  </g>
+  <text x="460" y="1059" text-anchor="middle" class="bt" fill="#5b5b52">/tmp/${SESSION}.* sentinels</text>
+  <text x="460" y="1078" text-anchor="middle" class="cap">identical contract to the CLI rig</text>
+
+  <!-- 7. waits -->
+  <g filter="url(#sh)">
+    <rect x="300" y="1158" width="320" height="126" rx="10" fill="#eef0f9" stroke="#4f5d99" stroke-width="2"/>
+  </g>
+  <text x="320" y="1184" class="bt" fill="#3a4680">orchestrator waits on</text>
+  <text x="320" y="1207" class="bd">turn-end · agent-done (idle)</text>
+  <text x="320" y="1229" class="bd">gate-pending (rig.ask)</text>
+  <text x="320" y="1251" class="bd">prompt-submitted (driver) · capture sentinels</text>
+
+  <!-- ============ spine connectors ============ -->
+  <path class="edge" d="M460,160 L460,226" marker-end="url(#arw)"/>
+  <text x="470" y="196" class="elbl">backend=desktop</text>
+  <path class="edge" d="M460,330 L460,396" marker-end="url(#arw)"/>
+  <path class="edge" d="M460,554 L460,620" marker-end="url(#arw)"/>
+  <text x="470" y="590" class="elbl">drives via AX</text>
+  <path class="edge" d="M460,770 L460,836" marker-end="url(#arw)"/>
+  <text x="470" y="806" class="elbl">model invokes MCP tools</text>
+  <path class="edge" d="M460,968 L460,1034" marker-end="url(#arw)"/>
+  <text x="470" y="1006" class="elbl">writes sentinels</text>
+  <path class="edge" d="M460,1092 L460,1158" marker-end="url(#arw)"/>
+  <text x="470" y="1130" class="elbl">consumed by</text>
+
+  <!-- ============ right offshoot: CLI backend (unchanged, de-emphasised) ============ -->
+  <rect x="724" y="226" width="236" height="150" rx="10" fill="#f4f3ee" stroke="#a9a89c" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="742" y="252" class="bt" fill="#6b6b62">CLI backend</text>
+  <text x="742" y="270" class="cap">unchanged — existing rig</text>
+  <text x="742" y="296" class="mono">render-hooks.sh</text>
+  <text x="742" y="315" class="mono">tmux-session.sh · driver.sh</text>
+  <text x="742" y="334" class="mono">asciinema rec</text>
+  <text x="742" y="353" class="mono">validate.mjs · agg → .gif</text>
+  <path class="edge" d="M620,124 H842 V226" marker-end="url(#arw)" stroke-dasharray="5 4"/>
+  <text x="700" y="116" class="elbl">backend=cli</text>
+
+  <!-- ============ right offshoot: capture output ============ -->
+  <g filter="url(#sh)">
+    <rect x="724" y="430" width="236" height="92" rx="10" fill="#e6f4f1" stroke="#2f8f83" stroke-width="2"/>
+  </g>
+  <text x="742" y="456" class="bt" fill="#1f6b61">capture output</text>
+  <text x="742" y="479" class="mono">.mov (h264)</text>
+  <text x="742" y="498" class="bd">→ ffmpeg → .mp4 / .gif</text>
+  <text x="742" y="515" class="cap">bin/render-webm.sh</text>
+  <path class="edge" d="M620,470 L724,470" marker-end="url(#arw)"/>
+  <text x="636" y="462" class="elbl">ScreenCaptureKit</text>
+
+  <!-- ============ right offshoot: coordination note ============ -->
+  <rect x="724" y="836" width="236" height="132" rx="10" fill="#fbfbf8" stroke="#c9c8bc" stroke-width="1.3"/>
+  <text x="742" y="862" class="bt" fill="#5b5b52">coordination</text>
+  <text x="742" y="886" class="bd">Chat + Code → mcp-bridge</text>
+  <text x="742" y="903" class="cap">A1 ✓ (.mcpb reachable)</text>
+  <text x="742" y="927" class="bd">CoWork → coworkd-log-tail</text>
+  <text x="742" y="944" class="cap">A2 documented-unreliable</text>
+  <text x="742" y="960" class="cap">(P0.2 pending)</text>
+  <path class="edge" d="M640,902 L724,902" marker-end="url(#arw)" stroke-dasharray="4 4"/>
+
+  <!-- ============ legend ============ -->
+  <rect x="40" y="1300" width="22" height="15" rx="4" fill="#e6f4f1" stroke="#2f8f83" stroke-width="2"/>
+  <text x="70" y="1312" class="bd">new / pivoted — AX + ScreenCaptureKit (this revision)</text>
+  <rect x="440" y="1300" width="22" height="15" rx="4" fill="#e9f3ec" stroke="#5a9367" stroke-width="2"/>
+  <text x="470" y="1312" class="bd">.mcpb sentinel bridge — A1 ✓ / A3 ✓</text>
+  <rect x="760" y="1300" width="22" height="15" rx="4" fill="#f4f3ee" stroke="#a9a89c" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="790" y="1312" class="bd">unchanged (CLI rig)</text>
+</svg>

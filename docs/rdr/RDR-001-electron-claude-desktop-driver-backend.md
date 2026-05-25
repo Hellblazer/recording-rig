@@ -116,31 +116,33 @@ Recorded as T2 entries `001-research-1` through `001-research-20`. Local probes 
 - **`claude://` URL handler is bundle-identity-scoped, NOT user-data-dir-scoped.** — **Verified** (source search). `defaults read /Applications/Claude.app/Contents/Info.plist CFBundleURLTypes` shows `CFBundleURLSchemes: ["claude"]` at the bundle level. `defaults read com.apple.LaunchServices/com.apple.launchservices.secure LSHandlers` shows `LSHandlerURLScheme = claude; LSHandlerRoleAll = "com.anthropic.claudefordesktop"`. Both Claude.app instances (primary + Claude-Rig) share the bundle identifier — there is no way to disambiguate two instances of the same bundle in LaunchServices. The RDR Risk "Auth deep-link collision when seeding from primary" is REAL and structurally unavoidable except by mutual exclusion. *T2: 001-research-10.*
 - **`.mcpb` and `.dxt` file extensions are registered with Claude.app as `CFBundleTypeRole: Viewer`.** — **Verified** (source search). `defaults read /Applications/Claude.app/Contents/Info.plist CFBundleDocumentTypes`: `{CFBundleTypeExtensions: ["dxt","mcpb"], CFBundleTypeIconFile: "dxt.icns", CFBundleTypeName: "Desktop Extension", CFBundleTypeRole: "Viewer"}`. **Implication for Spike P0.8**: `open path/to/recording-rig-bridge.mcpb` WILL trigger Claude.app's install flow because Claude.app is the registered handler for the `.mcpb` UTI. Note `.skill` is also registered (`CFBundleTypeName: "Skill File"`) — useful if the rig later wants to record skill-installation flows. *T2: 001-research-11.*
 - **CoWork VM bundle persists `machineIdentifier` per user-data-dir; gvisor networking artifacts (`vmIP`, `gvisorMacAddress`) are per-VM-start.** — **Verified** (source search). `ls ~/Library/Application Support/Claude/vm_bundles/claudevm.bundle/` shows: `efivars.fd, gvisorMacAddress, machineIdentifier, rootfs.img, rootfs.img.zst, sessiondata.img, vmIP`. Each `--user-data-dir` instance gets its own `vm_bundles/` so `machineIdentifier` (Apple's `VZGenericMachineIdentifier`) does NOT collide across instances. Whether the host's gvisor router supports parallel CoWork VMs remains open, but vsock CID collision is REFUTED by *001-research-17*. *T2: 001-research-12.*
-- **Playwright >= 1.59.0 is a hard prerequisite (BLOCKER FOUND + FIXED).** — **Documented** (source search). Playwright 1.57.0 and 1.58.0 fail against Electron 30+ (including Claude.app's Electron 41.6.1) because Playwright passes `--remote-debugging-port=0` as a CLI argument; Electron 30+ rejects this BEFORE any JavaScript executes (`bad option: --remote-debugging-port=0`). Reported as `microsoft/playwright#39008` (2026-01-28). Fixed by `microsoft/playwright PR#39012` (merged same day): "fix(electron): pass port via switches not args". Fix ships in **v1.58.1** (2026-01-30). v1.59.0 (2026-04-01) introduces `page.screencast.start/stop`. Current stable v1.60.0 (2026-05-11). The failure mode is opaque and would be misread as a signing/entitlement failure. **Plugin install instructions MUST pin `playwright >= 1.59.0`; doctor MUST check the version floor.** Strengthens A4 from Unverified to Documented; spike P0.5 reduced to "launch verification only". *T2: 001-research-13.*
+- **[SUPERSEDED by A4 FAIL / 2026-05-24 pivot — Playwright dropped from the design; no version pin applies, and P0.5 FAILED (not "reduced to launch verification"), triggering the AX/SCK pivot. Retained as historical research only.]** **Playwright >= 1.59.0 is a hard prerequisite (BLOCKER FOUND + FIXED).** — **Documented** (source search). Playwright 1.57.0 and 1.58.0 fail against Electron 30+ (including Claude.app's Electron 41.6.1) because Playwright passes `--remote-debugging-port=0` as a CLI argument; Electron 30+ rejects this BEFORE any JavaScript executes (`bad option: --remote-debugging-port=0`). Reported as `microsoft/playwright#39008` (2026-01-28). Fixed by `microsoft/playwright PR#39012` (merged same day): "fix(electron): pass port via switches not args". Fix ships in **v1.58.1** (2026-01-30). v1.59.0 (2026-04-01) introduces `page.screencast.start/stop`. Current stable v1.60.0 (2026-05-11). The failure mode is opaque and would be misread as a signing/entitlement failure. **Plugin install instructions MUST pin `playwright >= 1.59.0`; doctor MUST check the version floor.** Strengthens A4 from Unverified to Documented; spike P0.5 reduced to "launch verification only". *T2: 001-research-13.*
 - **CoWork `.mcpb` tool delivery has a documented race-condition bug — intended-but-unreliable in production.** — **Documented** (source search). `anthropics/claude-code#20377` (2026-01-23): local and `.mcpb` desktop tools not exposed to CoWork. Partially fixed for Python servers in Claude ~1.1.2156 (2026-02-05). Follow-up `#26259`: Desktop Extension MCP servers not forwarded to CoWork VM. Root cause: `remoteMcpServersConfig` is populated BEFORE all local servers finish initializing — servers that miss the window are silently dropped with no error. `enabledMcpTools` correctly records all connectors as enabled, but `remoteMcpServersConfig` (what reaches the VM) contains only a subset. **Failure is silent from the model's perspective.** **A2 weakens from Unverified to Documented-Unreliable.** Pessimistic-case fallback (`coworkd-log-tail` + file-mtime-watch on `outputs/`) is CONFIRMED necessary, not precautionary. Spike P0.2 must repeat multiple times to catch intermittent failures. *T2: 001-research-14.*
 - **No MCP-level session or conversation identifier exists.** — **Verified** (source search). MCP spec 2025-06-18: `_meta` is a generic extension point with NO session-scoping semantics. `clientInfo` on initialize is always `{"name":"claude-ai","version":"0.1.0"}` — zero per-instance differentiation. For stdio transport, no session identifier is defined. `anthropics/claude-code#41836` (2026-04, unresolved) confirms Claude does not echo `Mcp-Session-Id` back. **The `/tmp/recording-rig.active-session` pointer file is the only viable session scoping mechanism.** Bridge MUST defensively read the pointer file on every single tool call (not cache at startup). *T2: 001-research-15.*
 - **OAuth `claude://` deep-link routing is deterministically frontmost, not random.** — **Documented** (docs only). macOS LaunchServices routes custom-scheme callbacks to the registered bundle, then delivers the GetURL Apple Event via `NSAppleEventManager` to the **most-recently-active** running instance. **Deterministic, not random.** Mitigation correctly designed; the check MUST test for a running PID (`pgrep -f "Claude.app/Contents/MacOS/Claude"`), not focus state. The Risk section should be strengthened from "may go to wrong instance" to "WILL go to the most-recently-active instance". *T2: 001-research-16.*
 - **vsock CID is per-VM-namespaced — no dual-VM collision.** — **Verified** (source search). Apple Virtualization framework `VZVirtioSocketDeviceConfiguration`: every guest gets CID=3, host always has CID=2, each guest-host vsock pair is INDEPENDENT (per-VM namespace). Two host processes both creating CoWork VMs do NOT collide on CID=2. **REFUTES the CID collision risk surfaced in *001-research-7* and *001-research-12*.** Single-active-session guard (mirroring CLI rig's `tmux has-session`) makes this moot anyway. *T2: 001-research-17.*
 - **MCPB MANIFEST.md is SILENT on transport.** — **Documented** (source search). Per the canonical v0.4 schema at `github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md`, the spec does NOT say "stdio only" — transport is implementation-defined by Claude Desktop. Stdio is empirically confirmed (*001-research-1*) but not spec-mandated. **The silence is load-bearing**: a future Claude Desktop version could change transport for local extensions WITHOUT a manifest version bump. Bridge README and the RDR's "Cross-Cutting Concerns / Versioning" should document this assumption. *T2: 001-research-18.*
-- **`open path/to/.mcpb` install dialog is an in-app BrowserWindow element.** — **Documented** (Anthropic engineering blog). Whether the dialog opens as a NEW Electron `BrowserWindow` or as content within an existing one is unknown from docs. Spike P0.8 MUST use `electronApp.windows()` (plural) NOT just `firstWindow()`; subscribe to `electronApp.on('window', ...)` to catch new windows post-launch. Once located, Playwright DOM locators are viable for auto-dismiss (no AppleScript / AXUIElement required). *T2: 001-research-19.*
+- **[Partially SUPERSEDED by A4 FAIL / 2026-05-24 pivot — the `open path/to/.mcpb` install-dialog observation still holds, but dismissal uses the AX tree (`armWait` + `AXPress`), NOT Playwright DOM; `electronApp.windows()` / `.on('window', ...)` do not apply. See A8 / §Technical Design.]** **`open path/to/.mcpb` install dialog is an in-app BrowserWindow element.** — **Documented** (Anthropic engineering blog). Whether the dialog opens as a NEW Electron `BrowserWindow` or as content within an existing one is unknown from docs. Spike P0.8 MUST use `electronApp.windows()` (plural) NOT just `firstWindow()`; subscribe to `electronApp.on('window', ...)` to catch new windows post-launch. Once located, Playwright DOM locators are viable for auto-dismiss (no AppleScript / AXUIElement required). *T2: 001-research-19.*
 - **Per-MCPB log feed is suited for liveness diagnostics, NOT primary coordination.** — **Documented** (inference). Updates *001-research-4*: per-MCPB log only carries transport lifecycle events (too coarse for turn-end detection); `coworkd.log` carries semantic events (`[process:oneshot-<uuid>]` per-tool-call) and is the better-grounded log-based provider. The `log-tail-mcp` candidate from *001-research-4* should be DEMOTED from "third coordination provider" to "diagnostic signal" — if the bridge's log stops showing activity during an active session, the bridge may have crashed. Wire into `diagnose`. Code's pessimistic fallback should rely on file-mtime-watch of `local-agent-mode-sessions/.../outputs/`. *T2: 001-research-20.*
 - **Third-party host processes CANNOT register vsock listeners against Claude's Cowork VM.** — **Verified** (source search). Refines *001-research-7* and *001-research-17*. On Apple Virtualization framework, host-side vsock listeners are NOT plain BSD sockets — they are registered via `VZVirtioSocketDevice.setSocketListener(_:forPort:)`, an Apple framework API scoped to a specific `VZVirtualMachine` instance owned by the caller process. `coworkd` inside the Cowork VM reaches `CID=2:port=51234` only because Claude.app (the VM-creator) registered that listener on its own VM. A separate user-space process (nexus daemon, recording-rig bridge, any third party) CANNOT install a vsock listener on Claude's VM. Two independent walls block third-party VM→host: (1) Cowork's strict network allowlist (`api.anthropic.com`, `pypi.org`, `registry.npmjs.org` only — per nexus `docs/container-integration.md:184-189`), and (2) the per-VM Apple-framework listener registration. **RDR impact**: reinforces the bridge-as-MCPB choice — Claude.app dispatches the MCPB child process so the bridge naturally shares Claude.app's process tree and uses its own filesystem sentinels; a third-party vsock path was never structurally viable. Cross-references nexus T2 `cowork-vsock-third-party-host-listener-impossible-2026-05-23`, which validates nexus RDR-126's prior decision to use `--mcp-config "type": "sdk"` (Anthropic SDK bridge) rather than vsock. *T2: 001-research-21.*
 - **MCP servers always run on the macOS host as stdio child processes of `Claude Helper (Plugin).app`, INVARIANT across all three surfaces.** — **Verified** (source search). The model's location varies (Anthropic cloud for Chat, macOS host for Code local-agent-mode, Cowork Linux VM for Cowork), but MCP server location is fixed: host process tree. `~/Library/Logs/Claude/mcp.log` shows host-side spawns like `Using MCP server command: /usr/local/bin/npx with args [-y, @modelcontextprotocol/server-filesystem, ...]` and `Using MCP server command: /Users/.../uv with args [run, --directory, Claude Extensions/local.mcpb.hal-hildebrand.palinex, src/server.py]` — plain host PATH binaries, no in-VM execution. Tool-call routing per surface: **Chat** = cloud model → SSE down → Claude.app → stdio to MCPB → result back up SSE. **Code** = host model → in-process dispatch on host → stdio to MCPB. **Cowork** = VM agent → Anthropic SDK channel → Claude.app on host → stdio to MCPB → result back through SDK (the `--mcp-config "type": "sdk"` model from nexus `docs/container-integration.md:201-209`). **RDR impact**: the bridge MCPB writes `/tmp/${SESSION}.*` on the host every time, regardless of surface. The surface-dependent question is NOT "where does the bridge run" but ONLY "does the model on this surface reach the bridge's tool list" — deterministic for Chat, A1-pending for Code, documented-unreliable for Cowork due to the `remoteMcpServersConfig` race (*001-research-14*). *T2: 001-research-22.*
 
 ### Critical Assumptions
 
-These must be verified before this RDR moves to Accepted. Each is gated to a Phase 0 probe.
+Phase 0 spikes (2026-05-24) resolved these against the live app. **A4/A5/A10 are SUPERSEDED**: the original design's Playwright/CDP driver + `page.screencast` recording are non-viable (Claude.app blocks the Chromium remote-debugging transports Playwright requires), and are replaced by the validated **AXUIElement drive + ScreenCaptureKit record** stack (A11, A12). See §Revision History (2026-05-24 pivot).
 
-- [x] **A1.** `.mcpb` extension tools are reachable from the Code surface model context. — **Status**: Verified (P0.1, 2026-05-24) — probe `.mcpb` (`recording-rig-probe` v0.0.1, single tool `probe_distinctive_marker_42`) installed via `open ...mcpb` into the primary profile; Code session in `/Users/hal.hildebrand/git/nexus` issued `Please call the probe_distinctive_marker_42 tool and report exactly what it returns`; model used 2 tools and returned the verbatim marker `RECORDING_RIG_PROBE_DISTINCTIVE_MARKER_42_OK`. **Code surface → `mcp-bridge` provider (no `file-mtime-watch` fallback required for the optimistic case).** Naming deviation: implementation uses snake_case `probe_distinctive_marker_42` rather than the RDR's literal `probe.distinctive_marker_42` because every working production `.mcpb` (filesystem, palinex, conexus) uses snake_case and dot-notation collides with Claude's tool-namespacing convention; substance of the probe is unchanged. T2: `recording-rig/RDR-001-phase0-probes` (entry P0.1).
-- [ ] **A2.** `.mcpb` extension tools are reachable from the CoWork surface model context (proxied through vsock into the VM). — **Status**: Documented-Unreliable (round 2 — `001-research-14`) — `anthropics/claude-code#20377` and `#26259` confirm intent + race-condition bug in `remoteMcpServersConfig` initialization. Bug closed inactive without confirmed fix. — **Method**: Spike (P0.2) MUST repeat multiple times to catch intermittent failures. Pessimistic-case fallback for CoWork is CONFIRMED necessary, not precautionary.
-- [ ] **A3.** File-drop install (writing files to `Claude Extensions/` + editing `extensions-installations.json`) is honored on next Desktop launch, bypassing the Settings-UI install flow. — **Status**: Unverified — **Method**: Spike (P0.3). Not load-bearing for the chosen design (§4.1 hybrid uses Settings-UI install via `open path/to/.mcpb`); informs the recovery path if that flow breaks in a future Desktop release.
-- [ ] **A4.** Playwright's `_electron.launch` works against Claude.app's Electron 41.6.1. — **Status**: Documented (round 2 — `001-research-13`) — Playwright 1.57.0 / 1.58.0 blocked by `--remote-debugging-port=0` CLI-arg rejection (`microsoft/playwright#39008`); fixed in v1.58.1 via PR #39012; `page.screencast.start/stop` added in v1.59.0. **Plugin install MUST pin `playwright >= 1.59.0`; doctor MUST check version floor.** — **Method**: Spike (P0.5) reduced to launch-and-screencast verification against Claude.app v1.8555.2 with a pinned Playwright 1.59.0+.
-- [ ] **A5.** Claude.app uses a single BrowserWindow for the CoWork surface (no `BrowserView`/separate WebContents that Playwright `page.screencast` would miss). — **Status**: Unverified — **Method**: Spike (P0.4) — launch Claude.app with `--remote-debugging-port=9222`, inspect `chrome://inspect` during a CoWork session.
-- [ ] **A6.** DOM selectors for sidebar navigation, surface inputs, and send buttons can be discovered and pinned to a Desktop version. — **Status**: Unverified — **Method**: Spike (P0.6) — DevTools inspection on each surface, captured to `bin/desktop-selectors.json`.
-- [ ] **A7.** A long-idle Claude-Rig profile refreshes OAuth tokens on next launch without requiring a fresh interactive login. — **Status**: Unverified — **Method**: Spike (P0.7) — leave profile idle 48h, observe `main.log` for successful refresh on relaunch.
-- [ ] **A8.** `open path/to/.mcpb` triggers Claude Desktop's install dialog reliably AND dismissal can be sentinel-driven from the driver. — **Status**: Documented (round 2 — `001-research-11`, `001-research-19`) — `.mcpb` is registered with Claude.app as `CFBundleTypeRole: Viewer`; dialog renders as an in-app BrowserWindow element (per Anthropic engineering blog). Whether it opens as a new `BrowserWindow` or content within an existing one remains unknown. — **Method**: Spike (P0.8) MUST use `electronApp.windows()` (plural), not just `firstWindow()`; subscribe to `electronApp.on('window', ...)` to catch new windows post-launch. Playwright DOM locators are viable for auto-dismiss (no AppleScript / AXUIElement required). Second remaining TUI-scrape exception, analogous to the CLI rig's `consent_sweep` in `record.sh`.
-- [ ] **A9.** No two simultaneous Desktop-backend recordings collide; mutual exclusion is the only available cross-instance disambiguation. — **Status**: Verified by inference (round 2 — `001-research-10`, `001-research-16`, `001-research-17`). `claude://` LaunchServices is bundle-identity-scoped (no per-user-data-dir routing); OAuth callbacks go to most-recently-active instance; vsock CIDs are per-VM-namespaced (no collision at that layer), but the single-active-session guard makes the question moot. — **Method**: Implemented as a refuse-launch check (mirror of CLI rig's `record.sh:208-212` `tmux has-session`).
-- [ ] **A10.** `page.screencast.start/stop` works on Electron pages obtained via `electronApp.firstWindow()` for Electron 41 specifically. — **Status**: Unverified (round 2 — gap surfaced by `001-research-9` and `001-research-13`). API exists in Playwright v1.59+ for all backends, but Electron-specific verification not done. — **Method**: Spike (Phase 2 Step 1 — minimal "launch Claude.app, start screencast, click, stop, verify .webm playable" probe before the full driver lands).
+- [x] **A1.** `.mcpb` extension tools are reachable from the Code surface model context. — **Status**: **Verified (P0.1, 2026-05-24).** Probe `.mcpb` (`recording-rig-probe`, tool `probe_distinctive_marker_42`) installed; a Code session invoked the tool and returned the marker verbatim. No DISABLED-WITH-ERROR. Code-surface coordination → `mcp-bridge`. T2 `recording-rig/RDR-001-phase0-probes` (P0.1).
+- [ ] **A2.** `.mcpb` extension tools are reachable from the CoWork surface model context (proxied through vsock into the VM). — **Status**: Documented-Unreliable (round 2 — `001-research-14`); **P0.2 not yet run.** `anthropics/claude-code#20377` and `#26259` confirm intent + a race-condition bug in `remoteMcpServersConfig` initialization (closed inactive, no confirmed fix). — **Method**: Spike (P0.2) MUST repeat multiple times to characterize the intermittent-failure rate. CoWork pessimistic-case fallback (`coworkd-log-tail`) is CONFIRMED necessary regardless of pass rate.
+- [x] **A3.** File-drop install (writing files to `Claude Extensions/` + editing `extensions-installations.json`) is honored on next Desktop launch, bypassing the Settings-UI install flow. — **Status**: **Verified (P0.3, 2026-05-24).** Pure file-drop (unpacked `.mcpb` into `Claude Extensions/<id>/` + `extensions-installations.json` per the `001-research-8` schema, hash = sha256 of bundle) loaded in a logged-in profile: Settings → Extensions showed the probe + its tool. Confirms the doctor recovery path (no Settings-UI dialog required). Methodology note: load-check requires a *logged-in* profile — a fresh `--user-data-dir` gates Settings behind the "Get started" onboarding screen. T2 `recording-rig/RDR-001-phase0-probes` (P0.3).
+- [x] **A4. [SUPERSEDED → A11]** Playwright's `_electron.launch` works against Claude.app's Electron 41.6.1. — **Status**: **FAILED (P0.5, 2026-05-24).** Claude.app v1.8555.2 has a targeted anti-automation guard that calls `app.quit()` immediately on **either** Chromium remote-debugging transport (`--remote-debugging-port` any form OR `--remote-debugging-pipe`). Playwright drives Electron *exclusively* via the Chromium DevTools Protocol bootstrapped by one of those two flags — no third transport — so it cannot attach, version-independently. Controlled flag matrix: benign flags / `--user-data-dir` / `--remote-debugging-address` (no port) / Node `--inspect*` all leave the app running; both CDP transports kill it (graceful `app.quit()` ~64 ms post-AppKit, not a crash → deliberate). **Driver/record pivots to AXUIElement + ScreenCaptureKit (A11/A12).** T2 `recording-rig/claude-app-blocks-remote-debugging-flags-2026-05-24`, `recording-rig/RDR-001-phase0-probes` (P0.5).
+- [x] **A5. [SUPERSEDED → A12]** ~~Claude.app uses a single BrowserWindow for the CoWork surface (no `BrowserView`/separate WebContents that Playwright `page.screencast` would miss).~~ — **Status**: **Moot.** ScreenCaptureKit captures the window's compositor output (all layers, incl. any `BrowserView`/GPU content) by `windowID`, so the "page.screencast misses sub-panels" concern no longer applies. P0.4 (WebContents count) is unnecessary under the SCK pivot.
+- [x] **A6.** Surface-navigation, input, and send controls can be discovered and pinned to a Desktop version. — **Status**: **Verified (2026-05-24), reframed DOM → AX.** With a11y activated (`AXManualAccessibility`), Claude.app exposes named AX elements: `AXButton` desc="Chat"/"Code"/"Cowork", title="New session"; `AXTextArea` desc="Write your prompt to Claude" (composer). Selectors are AX role+description/title descriptors pinned in `bin/desktop-ax-selectors.json` (replacing the planned DOM `desktop-selectors.json`). T2 `recording-rig/claude-app-ax-driving-viable-2026-05-24`.
+- [ ] **A7.** A long-idle Claude-Rig profile refreshes OAuth tokens on next launch without requiring a fresh interactive login. — **Status**: **In progress (P0.7 clock running, near-certain PASS).** Baseline: the primary session credential `sessionKey` has a ~28-day TTL (expires 2026-06-21), so a 48h idle is well within range. Methodology correction: there is **no `main.log`** (Claude logs are global under `~/Library/Logs/Claude/`, no `main.log`); the observable is whether a 48h-idle relaunch lands logged-in vs back at "Get started". Doctor staleness threshold should track the 28-day `sessionKey` TTL, not 48h. T2 `recording-rig/RDR-001-phase0-probes` (P0.7).
+- [ ] **A8.** `open path/to/.mcpb` triggers Claude Desktop's install dialog reliably AND dismissal can be driven from the driver. — **Status**: Documented (round 2 — `001-research-11`); **P0.8 not yet run; dismissal mechanism reframed to AX.** `.mcpb` is registered `CFBundleTypeRole: Viewer`; `open ...mcpb` opens the install dialog (used successfully in P0.1/P0.3). — **Method**: Spike (P0.8) locates the dialog's install control via the AX tree (re-arm + wait-for-stable) and triggers it with `AXPress`, not Playwright DOM. Second remaining UI-driving exception, analogous to the CLI rig's `consent_sweep`.
+- [x] **A9.** Cross-instance disambiguation for simultaneous Desktop instances. — **Status**: **Refined (2026-05-24).** Multi-instance *launch* COEXISTS — `open -n --user-data-dir=<other>` runs a second instance alongside the primary (single-instance lock is per-user-data-dir), so the prior "mutual exclusion is the only option" premise is REFUTED at the launch layer. BUT an OAuth *login* on a second instance collides: the `claude://` device-verification step routes onto the other instance's window (bundle-scoped deep-link handler) — observed live (a login hijacked the primary's window). **Implication**: steady-state recording (no OAuth, `sessionKey` valid) can run concurrently with the user's primary; the one-time Claude-Rig *login/seed* requires the primary quit. T2 `recording-rig/claude-app-multi-instance-per-userdatadir-2026-05-24`.
+- [x] **A10. [SUPERSEDED → A12]** ~~`page.screencast.start/stop` works on Electron pages via `electronApp.firstWindow()`.~~ — **Status**: **Moot** (Playwright path dead). Recording is via ScreenCaptureKit (A12).
+- [x] **A11. (new)** Claude.app's UI is drivable via the macOS Accessibility API. — **Status**: **Verified (2026-05-24).** Activate with `AXUIElementSetAttributeValue(app, "AXManualAccessibility", true)` from a long-lived process holding the connection → full web UI exposed (≈265–371 named nodes). Navigation: `AXPress` on named buttons (validated: Chat/Code/Cowork switching). Input + submit: set composer `AXValue` (element-scoped, safe) then post a **process-targeted** Return (`CGEvent…postToPid(rigPid)`, virtualKey 0x24) — validated end-to-end (test prompt sent, Claude's response read back via the AX tree). Window geometry via `kAXSizeAttribute` (validated). **Two driver invariants**: (1) a11y is non-persistent across UI re-renders — re-arm + poll-until-stable before each action from ONE long-lived process; (2) **NEVER global CGEvent** (`.post(tap:)` leaks to the focused app — observed) — use `postToPid` only. T2 `recording-rig/claude-app-ax-driving-viable-2026-05-24`, `recording-rig/claude-app-ax-input-submit-mechanism-2026-05-24`.
+- [x] **A12. (new)** ScreenCaptureKit records the Claude-Rig window to a video file. — **Status**: **Verified (2026-05-24).** `SCShareableContent` → filter by `owningApplication.processID` → `SCContentFilter(desktopIndependentWindow:)` → `SCStream` → `AVAssetWriter` produced a valid h264 `.mov` (3 s → 94 frames @ 30 fps, ffprobe-confirmed). One-shot via `SCScreenshotManager` also works. Gotcha: a CLI tool must init `NSApplication.shared` (`.accessory`) or it crashes `CGS_REQUIRE_INIT`. Requires Screen Recording permission (doctor must check). T2 `recording-rig/claude-app-screencapturekit-recording-viable-2026-05-24`.
 
 **Method definitions** (template-standard):
 
@@ -154,87 +156,17 @@ These must be verified before this RDR moves to Accepted. Each is gated to a Pha
 
 A second driver backend, additive to the CLI backend. Selection via a new top-level `backend: "cli" | "desktop"` field in the spec (default `"cli"`). The CLI backend stays byte-identical; existing CLI specs continue to record without modification.
 
-The Desktop backend uses Playwright Electron (`_electron.launch`) to drive an isolated long-lived Claude.app profile (`~/Library/Application Support/Claude-Rig/`) with a permanently installed `.mcpb` bridge (`recording-rig-bridge.mcpb`) that acts as the sentinel emitter. The bridge exposes four tools the model is instructed to call at named beats: `rig.turn_end()`, `rig.checkpoint(name)`, `rig.ask(options) → answer_index`, `rig.emit(name, payload)`. Each call atomically writes a sentinel file under `/tmp/${SESSION}.*` using the SAME contract as the CLI rig (`.partial` + rename, no trailing newline, identifier regex `[A-Za-z0-9._-]+` from `lib/sentinels.sh:12` `rig_check_identifier`). Sentinel files inherit the invoker's umask (typically owner-readable/writable, group/world-readable); the bridge runs in Claude.app's process tree under the same user as the rig, matching CLI rig behavior. The `prompt-submitted` sentinel (analogue of the CLI's `UserPromptSubmit` hook) is **not** a bridge tool; it is written by the driver itself immediately after `locator.fill()` + send-button click, because the driver knows when it submitted and no model action is needed. This preserves the existing sentinel-name semantics consumed by `commands/diagnose.md:12` and by companion-pane start signals.
+The Desktop backend launches an isolated long-lived Claude.app profile (`~/Library/Application Support/Claude-Rig/`) via LaunchServices and drives it with a **Swift helper (`bin/desktop-driver`) over the macOS Accessibility API** (`AXUIElement`), recording via **ScreenCaptureKit** — the validated replacement for the original Playwright/CDP design, which is non-viable because Claude.app blocks the Chromium remote-debugging transports Playwright requires (A4, P0.5). A permanently installed `.mcpb` bridge (`recording-rig-bridge.mcpb`) acts as the sentinel emitter. The bridge exposes four tools the model is instructed to call at named beats: `rig.turn_end()`, `rig.checkpoint(name)`, `rig.ask(options) → answer_index`, `rig.emit(name, payload)`. Each call atomically writes a sentinel file under `/tmp/${SESSION}.*` using the SAME contract as the CLI rig (`.partial` + rename, no trailing newline, identifier regex `[A-Za-z0-9._-]+` from `lib/sentinels.sh:12` `rig_check_identifier`). Sentinel files inherit the invoker's umask; the bridge runs in Claude.app's process tree under the same user as the rig, matching CLI rig behavior. The `prompt-submitted` sentinel (analogue of the CLI's `UserPromptSubmit` hook) is **not** a bridge tool; the Swift driver writes it immediately after the `AXValue`-set + process-targeted-Return submit, because the driver knows when it submitted and no model action is needed. This preserves the existing sentinel-name semantics consumed by `commands/diagnose.md:12` and by companion-pane start signals.
 
-Surface coordination is provider-polymorphic. A `CoordinationProvider` interface with three implementations — `mcp-bridge` (strongest), `file-mtime-watch` (Code fallback), `coworkd-log-tail` (CoWork fallback) — selected per-surface by doctor's cached probe results (`coordination: "auto"` in the spec). The optimistic case (A1 and A2 both pass): all three surfaces use `mcp-bridge`. The pessimistic case: Chat uses `mcp-bridge`; Code falls back to file-mtime; CoWork falls back to log-tail. Spec authors write the same spec either way; the provider is chosen at preflight.
+Surface coordination is provider-polymorphic. A `CoordinationProvider` interface with implementations — `mcp-bridge` (strongest), `coworkd-log-tail` (CoWork fallback), `file-mtime-watch` (retained as a recovery option) — selected per-surface by doctor's cached probe results (`coordination: "auto"` in the spec). Post-P0.1 (A1 ✅): **Chat AND Code use `mcp-bridge`** — the `.mcpb` bridge is reachable from both. CoWork (A2 documented-unreliable, P0.2 pending) uses `coworkd-log-tail` as its fallback. Spec authors write the same spec either way; the provider is chosen at preflight.
 
 ### Technical Design
 
-Architecture overview (mirrors the CLI rig's ASCII diagram in `../design.md`):
+Architecture overview:
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                                record.sh                             │
-│                       (backend dispatcher; CLI is default)           │
-└────────────┬──────────────────────────────────┬──────────────────────┘
-             │ backend=cli                      │ backend=desktop
-             ▼                                  ▼
-   ┌───────────────────┐              ┌──────────────────────────────┐
-   │ existing CLI path │              │ bin/desktop-driver.mjs       │
-   │ (unchanged):      │              │  (Node + Playwright)         │
-   │  render-hooks.sh  │              │   │                          │
-   │  tmux-session.sh  │              │   ├─ launch Claude.app via   │
-   │  driver.sh        │              │   │   _electron.launch       │
-   │  asciinema rec    │              │   │   --user-data-dir=<prof> │
-   │  validate.mjs     │              │   ├─ write active-session    │
-   │  agg              │              │   │   pointer + rig-config   │
-   └───────────────────┘              │   ├─ navigate to surface     │
-                                      │   ├─ paste agent.command(s)  │
-                                      │   ├─ touch prompt-submitted  │
-                                      │   ├─ watch sentinels         │
-                                      │   ├─ page.screencast → .webm │
-                                      │   └─ on agent-done: stop +   │
-                                      │      teardown                │
-                                      └───────┬──────────────────────┘
-                                              │
-                              spawns / drives  ▼
-   ┌──────────────────────────────────────────────────────────────────┐
-   │              Claude.app (Electron, headed, isolated profile)     │
-   │  ┌──────────┐  ┌──────────┐  ┌──────────────────────────────┐    │
-   │  │  Chat    │  │  Code    │  │  CoWork (Linux VM via vsock) │    │
-   │  └────┬─────┘  └────┬─────┘  └────┬─────────────────────────┘    │
-   │       │             │             │                              │
-   │       └─────────────┼─────────────┘                              │
-   │                     │ model invokes MCP tools                    │
-   │                     ▼                                            │
-   │     ┌─────────────────────────────────────────────┐              │
-   │     │   recording-rig-bridge.mcpb (permanent)     │              │
-   │     │     reads /tmp/<sess>.rig-config.json       │              │
-   │     │     writes /tmp/<sess>.* sentinels          │              │
-   │     │     logs /tmp/<sess>.bridge-transcript.jsonl│              │
-   │     │     tools: rig.turn_end                     │              │
-   │     │            rig.checkpoint(name)             │              │
-   │     │            rig.ask(options) → answer_index  │              │
-   │     │            rig.emit(name, payload)          │              │
-   │     └──────────────────┬──────────────────────────┘              │
-   └────────────────────────┼─────────────────────────────────────────┘
-                            │ sentinel files
-                            ▼
-        ┌──────────────────────────────────────┐
-        │ /tmp/${SESSION}.* sentinel namespace │
-        │   (identical contract to CLI rig)    │
-        └────────┬─────────────────────────────┘
-                 │ consumed by
-                 ▼
-        ┌──────────────────────────────────────┐
-        │ desktop-driver waits on:             │
-        │   turn-end (rig.turn_end)            │
-        │   agent-done (driver-set on idle)    │
-        │   gate-pending (rig.ask call)        │
-        │   <capture-tool sentinels>           │
-        │   prompt-submitted (driver-written)  │
-        └──────────────────────────────────────┘
+![RDR-001 Desktop backend architecture](RDR-001-architecture.svg)
 
-  Pessimistic-case fallback (when A1/A2 fail) replaces bridge → sentinels
-  for Code and CoWork with:
-    file-mtime-watch: local-agent-mode-sessions/ mtime → turn-end sentinel
-    coworkd-log-tail: coworkd.log structured events → turn-end sentinel
-  Driver code is provider-polymorphic; downstream consumers unchanged.
-
-  Post-recording (both cases):
-    .webm → ffmpeg → .mp4 + .gif (new bin/render-webm.sh)
-    bridge-transcript.jsonl + .webm + spec → validate.mjs
-```
+The Desktop backend is additive to the CLI backend (`record.sh` dispatches on `backend`). `record.sh` (shell/Node) orchestrates — owning SESSION, spec, the `/tmp/${SESSION}.*` sentinel watch, and the `active-session` pointer — and launches Claude.app via LaunchServices (`open -n -a Claude --user-data-dir=<Claude-Rig>`), then invokes the Swift helper `bin/desktop-driver` for AX-drive + ScreenCaptureKit capture. The model invokes the permanent `recording-rig-bridge.mcpb`, which writes `/tmp/${SESSION}.*` sentinels (byte-identical contract to the CLI rig's hooks); the orchestrator waits on those plus the driver-written `prompt-submitted`. Coordination is provider-polymorphic: Chat + Code use `mcp-bridge` (A1 ✅), CoWork uses the `coworkd-log-tail` fallback (A2 pending). Post-recording, the ScreenCaptureKit `.mov` → ffmpeg → `.mp4`/`.gif` (new `bin/render-webm.sh`), and `bridge-transcript.jsonl` + `.mov` + spec → `validate.mjs`.
 
 **Interfaces** (signatures; implementations deferred to phase plan):
 
@@ -256,62 +188,82 @@ rig.emit(name: string, payload?: object) → { ok: true }
 
 Bridge tools are idempotent. Each writes `/tmp/${SESSION}.<suffix>` via the same atomic `.partial`+rename pattern used by `render-hooks.sh:31-44` (the CLI hook generator). Identifier `<name>` and `<suffix>` are validated against the SAME regex `[A-Za-z0-9._-]+` sourced from `lib/sentinels.sh:12` `rig_check_identifier`; the bridge inlines a port of this function as defense in depth, but preflight in `record.sh:104-107` continues to gate ahead of dispatch. Transcript log at `/tmp/${SESSION}.bridge-transcript.jsonl` (append-only, one JSON object per call: `{ ts, tool, args, result, session }`) is the validator's primary input.
 
-Bridge session resolution: bridge reads `/tmp/recording-rig.active-session` (a single-line file containing the active SESSION id) on every tool call. The driver writes this file immediately before launching Claude.app and unlinks it at teardown. If absent, the bridge logs the call to `/tmp/recording-rig.orphan-calls.jsonl` and returns `{ ok: false, reason: "no active session" }` to the model — fails loud, lets the model retry on the next turn.
+Bridge session resolution: bridge reads `/tmp/recording-rig.active-session` (a single-line file containing the active SESSION id) on every tool call. `record.sh` writes this file immediately before launching Claude.app and unlinks it at teardown. If absent, the bridge logs the call to `/tmp/recording-rig.orphan-calls.jsonl` and returns `{ ok: false, reason: "no active session" }` to the model — fails loud, lets the model retry on the next turn.
 
-Driver launch (sketch — actual `_electron.launch` invocation in `bin/desktop-driver.mjs`). API signatures verified against Playwright `/microsoft/playwright` docs (round-2 finding `001-research-9`): `_electron.launch()` accepts ONLY `{executablePath, args, cwd, env, timeout}`. Recording is per-page via `page.screencast.start/stop` (Playwright v1.59+; pin per `001-research-13`). HAR/trace capture for Electron is contingent on a Phase 2 sub-spike (see A10 / Failure Modes notes below).
+**Per-session config side-channel — `rig-config.json`.** Once the bridge resolves the active SESSION, it reads `/tmp/${SESSION}.rig-config.json` to answer `rig.ask`. `record.sh` writes this file atomically (`.partial` + rename) before launching Claude.app, from the spec's `gates[]`. Shape:
 
-```text
-const electronApp = await electron.launch({
-  executablePath: "/Applications/Claude.app/Contents/MacOS/Claude",
-  args: ["--user-data-dir=${HOME}/Library/Application Support/Claude-Rig",
-         "--no-default-browser-check"],
-  env: { ...process.env, /* spec.desktop.env */ },
-  timeout: 30000,
-})
-
-// Recording page: firstWindow() returns the initial BrowserWindow.
-const page = await electronApp.firstWindow()
-
-// Install-dialog detection (P0.8 flow): subscribe to windows() because
-// the dialog may open as a new BrowserWindow post-launch — firstWindow()
-// would miss it (per round-2 finding 001-research-19 / A8 refinement).
-electronApp.on('window', async (dialogPage) => { /* dismiss if install-dialog */ })
-
-// Screencast (Playwright v1.59+): per-page, not a launch option.
-await page.screencast.start({ path: webmPath, fps: spec.render?.fps ?? 24 })
-// ... drive the session ...
-await page.screencast.stop()
-
-// HAR + tracing for Electron: contingent on Phase 2 sub-spike validating
-// context.tracing.startHar() and .start() on a context derived from the
-// Electron app (001-research-9). Not safe to assume available.
+```json
+{
+  "session": "<SESSION>",
+  "gates": [
+    { "for_command": 0, "answer_index": 1 },
+    { "for_command": 0, "answer_index": 0 }
+  ]
+}
 ```
 
-Surface navigation uses cached DOM selectors in a new `bin/desktop-selectors.json` (populated by Phase 0 P0.6 spike). Driver calls `page.click(selectors["sidebar." + spec.desktop.surface])` then waits on a `surface-ready` sentinel the bridge writes when it observes the first tool-listing call from the new surface (analogue of CLI's `session-start` wait).
+The bridge consumes gate answers in call order per command: the Nth `rig.ask` during command *k* returns the Nth `gates[]` entry whose `for_command == k` (mirrors the CLI rig's ordered-gate semantics in `bin/driver.sh`). If `rig.ask` is called with no matching remaining gate entry, the bridge returns `{ ok: false, reason: "no gate configured" }` (fails loud — surfaces an under-specified spec rather than guessing). The bridge re-reads `rig-config.json` on each call (never caches), consistent with the `active-session` read, so a mid-session config rewrite is honored. This is the side-channel referenced in §Alternative 1's rejection (permanent dispatcher + per-session config) — it is what lets one permanently-installed bridge serve any spec without a per-recording reinstall.
 
-Typing input: Playwright's `locator(input).fill(text)` for the agent.command, then `locator(send).click()` (or `keyboard.press("Enter")` per surface). After send, the driver atomically writes `/tmp/${SESSION}.prompt-submitted` (same `.partial`+rename pattern). No paste-buffer trick needed — Playwright's `fill` is reliable on long inputs, unlike `tmux send-keys -l`.
+Driver: a compiled Swift helper `bin/desktop-driver` (Swift chosen because AXUIElement and ScreenCaptureKit are Cocoa APIs and pyobjc is not available; `swiftc` is present). `record.sh` (shell/Node) remains the orchestrator — it owns SESSION resolution, spec parsing, the `/tmp/${SESSION}.*` sentinel watch, and the `active-session` pointer — and invokes the Swift helper for the AX-drive + capture work. All mechanisms below are validated against the live app (Phase 0, 2026-05-24; T2 `claude-app-ax-driving-viable`, `-ax-input-submit-mechanism`, `-screencapturekit-recording-viable`).
 
-Sentinel watch reuses CLI semantics, ported to JS: poll `turn-end` mtime, idle when stable for `idle_seconds`. Same `turn_timeout_sec` and `session_max_sec` ceilings. Per-command flow mirrors `bin/driver.sh`: `rm turn-end` before paste, paste, consume gates targeted at this command, wait idle. Concrete primitives: `sentinel_clear_all()` (`lib/sentinels.sh:41`) called before pre-paste; `sentinel_wait_idle()` (`lib/sentinels.sh:78`) ported to JS for the idle wait. The original bash primitives continue to gate the outer `record.sh` orchestrator.
+**Launch** (LaunchServices, NOT direct exec — direct exec of the binary exits immediately; `open` works):
 
-Screencast control: `page.screencast.start({ path: webmPath, fps: spec.render?.fps ?? 24 })` before first paste; `page.screencast.stop()` after `agent-done` + `exit_hold_sec`. Final-frame screenshot via `page.screenshot({ path: finalFramePath })` for thumbnails.
+```text
+open -n -a Claude --args \
+  --user-data-dir="$HOME/Library/Application Support/Claude-Rig" \
+  --force-renderer-accessibility        # survives the guard; harmless. NEVER pass --remote-debugging-* (guard quits the app)
+```
 
-Teardown: on `agent-done` sentinel + hold, `electronApp.close()` (clean Electron exit flushes video). Unlink `/tmp/recording-rig.active-session`. Optionally save Playwright trace zip for `diagnose`.
+**Attach AX + drive** (Swift `bin/desktop-driver`, holding one long-lived AX connection):
+
+```text
+let app = AXUIElementCreateApplication(rigPid)            // rigPid: main Claude-Rig process
+AXUIElementSetAttributeValue(app, "AXManualAccessibility", true)   // flips Chromium's NSAccessibility bridge
+
+// INVARIANT 1: a11y is non-persistent across UI re-renders. Re-arm + poll
+// until the target element re-appears before EVERY action (wait-for-stable).
+func armWait(role, desc) -> AXUIElement   // re-set AXManualAccessibility; walk; retry
+
+// Navigation: AXPress on named buttons (validated: Chat/Code/Cowork)
+AXUIElementPerformAction(armWait("AXButton", surfaceDesc), kAXPressAction)
+
+// Window geometry (deterministic recording size): set + re-assert
+AXUIElementSetAttributeValue(win, kAXSizeAttribute, 1280x800)   // verify; re-assert if reverted
+
+// Input + submit (the validated recipe):
+let composer = armWait("AXTextArea", "Write your prompt to Claude")  // surface-specific desc
+AXUIElementSetAttributeValue(composer, kAXValueAttribute, agentCommand)  // element-scoped, safe
+//   INVARIANT 2: NEVER global CGEvent (.post(tap:) leaks to the focused app — observed).
+CGEvent(virtualKey: 0x24 /*Return*/, keyDown: true).postToPid(rigPid)   // process-targeted
+CGEvent(virtualKey: 0x24, keyDown: false).postToPid(rigPid)
+// driver then atomically writes /tmp/${SESSION}.prompt-submitted (.partial+rename)
+```
+
+Notes: `AXValue`-set alone is inert for submit (doesn't fire the framework input event, so the Send button never enables) — the process-targeted Return is what submits. `kAXConfirmAction` on the composer is a no-op. Target the composer by surface-specific `AXDescription` (Chat="Write your prompt to Claude"; the home/launcher composer "Describe a task or ask a question" is a different element whose `AXValue`-set is inert).
+
+**Install-dialog dismissal** (A8): `open path/to/.mcpb` opens the install dialog; the driver locates its install control in the AX tree (`armWait` + `AXPress`). No Playwright DOM, no AppleScript.
+
+**Recording** (ScreenCaptureKit → h264 `.mov`): `SCShareableContent` → filter windows by `owningApplication.processID == rigPid` → `SCContentFilter(desktopIndependentWindow:)` → `SCStream` + `AVAssetWriter` (start the writer session on the first frame's PTS) before first paste; stop + `finishWriting()` after `agent-done` + `exit_hold_sec`. One-shot final-frame thumbnail via `SCScreenshotManager`. The Swift helper must init `NSApplication.shared` (`.accessory`) at startup or CG/SCK calls crash `CGS_REQUIRE_INIT`. Captures the window's compositor output by `windowID` (all layers, incl. any `BrowserView`/GPU content) — supersedes the page.screencast/BrowserView concern (former A5).
+
+**Sentinel watch** is unchanged from the CLI design and stays in `record.sh`/shell: poll `turn-end` mtime, idle when stable for `idle_seconds`; same `turn_timeout_sec` / `session_max_sec` ceilings; `sentinel_clear_all()` (`lib/sentinels.sh:41`) before pre-paste, `sentinel_wait_idle()` (`lib/sentinels.sh:78`) for the idle wait. Per-command flow mirrors `bin/driver.sh`. The bridge writes `turn-end`/`checkpoint`/`gate-pending`; the Swift helper writes `prompt-submitted`.
+
+**Teardown**: stop the SCStream + `AVAssetWriter.finishWriting()` (flushes the `.mov`), quit the Claude-Rig instance (graceful), unlink `/tmp/recording-rig.active-session`.
 
 #### Existing Infrastructure Audit
 
 | Proposed Component | Existing Module | Decision |
 | --- | --- | --- |
-| Backend dispatch in `record.sh` | `bin/record.sh` (CLI-only today) | **Extend**: insert `case "$BACKEND" in cli) … ;; desktop) exec node bin/desktop-driver.mjs "$SPEC" ;;` after shared preflight + sentinel_clear_all, before tmux/asciinema. Shared steps (SESSION resolution, sentinel_clear_all, preflight identifier regex) run before fork. |
-| `bin/desktop-driver.mjs` | none — new file | **Create**: Node ES module, Playwright dependency. |
-| `bin/render-webm.sh` | `bin/render-hooks.sh` (different role) | **Create**: invokes ffmpeg + gifski for `.webm → .mp4 + .gif`. |
-| `bin/desktop-selectors.json` | none — new file | **Create**: per-Desktop-version DOM selector cache, populated by P0.6. |
+| Backend dispatch in `record.sh` | `bin/record.sh` (CLI-only today) | **Extend**: insert `case "$BACKEND" in cli) … ;; desktop) launch Claude-Rig + exec bin/desktop-driver "$SPEC" ;;` after shared preflight + sentinel_clear_all, before tmux/asciinema. Shared steps (SESSION resolution, sentinel_clear_all, preflight identifier regex) run before fork. |
+| `bin/desktop-driver` | none — new file | **Create**: compiled **Swift** helper (AXUIElement drive + ScreenCaptureKit capture). `swiftc` present; pyobjc absent. |
+| `bin/render-webm.sh` | `bin/render-hooks.sh` (different role) | **Create**: invokes ffmpeg + gifski for `.mov → .mp4 + .gif`. |
+| `bin/desktop-ax-selectors.json` | none — new file | **Create**: per-Desktop-version **AX selector** cache (role + AXDescription/AXTitle), populated when AX selectors are pinned. |
 | `recording-rig-bridge.mcpb` | none — new artifact | **Create**: standalone MCPB bundle, built in this repo and published to releases. |
 | Sentinel write contract | `bin/render-hooks.sh:31-44` (atomic .partial+rename) | **Reuse**: bridge implements the same pattern in Node. |
 | Identifier regex | `lib/sentinels.sh:12` `rig_check_identifier` `[A-Za-z0-9._-]+` | **Reuse**: bridge inlines the same regex; preflight in `record.sh:104-107` continues to gate. |
 | `sentinel_clear_all` | `lib/sentinels.sh:41` | **Reuse via shell**: orchestrator calls before driver dispatch; driver does not re-clear. |
-| `sentinel_wait_idle` | `lib/sentinels.sh:78` | **Port**: equivalent JS implementation inside `bin/desktop-driver.mjs` for mtime-based idle wait. |
-| `bin/validate.mjs` | `bin/validate.mjs` (asciinema-cast parser) | **Extend**: branch on `spec.backend`; for `desktop`, read `bridge-transcript.jsonl` as primary input + `.webm` metadata as sanity. |
-| Plugin commands | `commands/{record,author-spec,doctor,diagnose}.md` | **Extend** all four to be backend-aware (`record` dispatches on `backend`; `doctor` adds Desktop checks; `author` adds Desktop fields; `diagnose` learns webm/transcript/trace forensics). |
+| `sentinel_wait_idle` | `lib/sentinels.sh:78` | **Reuse via shell**: the idle wait stays in `record.sh`/shell (orchestrator), not the Swift helper. |
+| `bin/validate.mjs` | `bin/validate.mjs` (asciinema-cast parser) | **Extend**: branch on `spec.backend`; for `desktop`, read `bridge-transcript.jsonl` as primary input + `.mov` metadata as sanity. |
+| Plugin commands | `commands/{record,author-spec,doctor,diagnose}.md` | **Extend** all four to be backend-aware (`record` dispatches on `backend`; `doctor` adds Desktop checks; `author` adds Desktop fields; `diagnose` learns `.mov`/transcript forensics). |
 | `lib/sentinels.sh` | as-is | **No change**: primitives are bash-shell only; JS port lives in driver. |
 
 ### Decision Rationale
@@ -377,7 +329,7 @@ Eight further decisions (bridge install lifecycle, user-data-dir strategy, recor
 
 ### Alternative 4: Network interception of `api.anthropic.com` SSE streams
 
-**Description**: Use Playwright `page.route()` on the Chat BrowserWindow to intercept SSE responses and detect `message_stop` events as turn-end.
+**Description**: Intercept `api.anthropic.com` SSE responses on the Chat surface and detect `message_stop` events as turn-end.
 
 **Pros**:
 
@@ -387,9 +339,9 @@ Eight further decisions (bridge install lifecycle, user-data-dir strategy, recor
 **Cons**:
 
 - Works only in Chat — Code routes through a separate local-agent-mode process; CoWork routes through a vsock-mediated VM. Not uniform across surfaces.
-- Adds a Playwright-specific code path that doesn't help the other surfaces
+- Requires an in-app network-interception transport (CDP `page.route` etc.) — **structurally unavailable** now that Claude.app blocks the Chromium remote-debugging transports (A4/P0.5). No supported network-interception hook remains.
 
-**Reason for rejection**: Not uniform. Kept as a supplementary diagnostic (HAR capture) but not as a primary coordination mechanism.
+**Reason for rejection**: Not uniform, and the only viable interception transport (CDP) is blocked by the app guard. The `.mcpb` bridge's `rig.turn_end` is the uniform, transport-independent turn-end signal instead.
 
 ### Alternative 5: Fresh user-data-dir + auth seeding per recording
 
@@ -425,22 +377,22 @@ Eight further decisions (bridge install lifecycle, user-data-dir strategy, recor
 
 **Reason for rejection**: Chose single unified spec with `backend` discriminator. Repurposed semantics for `agent.command(s)`, `hooks.capture_tools[]`, `gates[]` are documented in §Technical Design. Trades a small mental-model load (same field, different backend behavior) for spec-format unity.
 
-### Alternative 7: ScreenCaptureKit primary capture
+### Alternative 7: ScreenCaptureKit primary capture — **ADOPTED (2026-05-24 revision)**
 
-**Description**: Use macOS ScreenCaptureKit (AVFoundation) as the primary capture mechanism, with Playwright as a control plane only.
+**Description**: Use macOS ScreenCaptureKit as the primary capture mechanism. (Originally framed as an alternative to Playwright's `page.screencast`.)
 
 **Pros**:
 
-- Captures everything visible on the window, including any BrowserView sub-panels Playwright misses
+- Captures the window's compositor output by `windowID` — everything visible, including any `BrowserView`/GPU sub-panels
 - Higher fidelity for canvas/GPU content
+- Independent of any in-app automation transport — unaffected by Claude.app's CDP guard
 
 **Cons**:
 
-- macOS-only (the backend is macOS-first in phase 1 anyway, but adds a Mac-specific dependency)
-- `.mov` output diverges from the existing ffmpeg-based post-processing pipeline
-- Doubles disk + CPU for the common case where Playwright is sufficient (Chat, Code)
+- macOS-only (the backend is macOS-first anyway; AX drive is also macOS-only, so no new platform constraint)
+- `.mov` output → one ffmpeg transcode step (`bin/render-webm.sh`)
 
-**Reason for rejection**: Chose Playwright `recordVideo` primary; ScreenCaptureKit as a secondary parallel stream gated behind P0.4 (only added if CoWork rendering has BrowserView sub-panels Playwright would miss). Pays the SCK cost only when it's necessary.
+**Status**: **Adopted as the primary (and only) capture path.** When P0.5 killed the Playwright/CDP driver, `page.screencast` died with it, and the BrowserView-coverage concern (former A5) became moot — SCK captures the whole window regardless. Validated in Phase 0 (A12): h264 `.mov`, 94 frames / 3 s. No "only when necessary" gating remains — SCK is the recording mechanism.
 
 ### Alternative 8: Separate `/recording-rig:desktop` command surface
 
@@ -459,7 +411,7 @@ Eight further decisions (bridge install lifecycle, user-data-dir strategy, recor
 
 ### Briefly Rejected
 
-- **Headless Desktop recording**: Playwright Electron is headed-only; the recording IS the headed render. No headless mode to ship.
+- **Headless Desktop recording**: the recording IS the headed render, and AX-driving + ScreenCaptureKit both require an on-screen window. No headless mode to ship.
 - **Cross-machine profile portability**: Electron safe-storage is hardware-bound; copying a profile to another machine fails to decrypt encrypted blobs.
 - **Linux Claude Desktop support**: Claude Desktop does not ship on Linux.
 - **Video frame OCR as primary validation**: Tesseract per keyframe is expensive, adds a Python dependency, unreliable on small/anti-aliased text. Worst signal-to-noise.
@@ -474,7 +426,8 @@ Eight further decisions (bridge install lifecycle, user-data-dir strategy, recor
 - **Positive**: Long-lived `Claude-Rig` profile pays setup cost once; OAuth refresh is automatic.
 - **Positive**: Bridge sentinel contract is byte-identical to CLI hooks; `diagnose` taxonomy carries over.
 - **Negative**: This backend is structurally less deterministic than the CLI backend. Model must choose to call `rig.turn_end` and `rig.checkpoint`; instruction drift is a real failure mode mitigated by, but not eliminated by, the system-prompt prologue.
-- **Negative**: Phase 0 probe results may force the pessimistic case (Code uses file-mtime-watch, CoWork uses coworkd-log-tail) in which `gates[]` are not supported on those surfaces and checkpoint assertions degrade to substring matches. Documented in the spec preflight.
+- **Negative**: CoWork remains a fallback surface (A2 documented-unreliable, P0.2 pending) using `coworkd-log-tail`, where `gates[]` are not supported and checkpoint assertions degrade to substring matches. Chat and Code both use `mcp-bridge` (A1 ✅), so the original "Code might fall back" worry is resolved. Documented in the spec preflight.
+- **Negative**: The Desktop driver depends on macOS Accessibility behavior that is fragile by nature: a11y must be re-armed across UI re-renders, and synthetic input must be process-targeted. Both are validated (A11) but are version-sensitive to Claude.app/Electron updates.
 - **Negative**: CoWork in the pessimistic case is bounded by an unresolved race-condition bug in Claude's own `remoteMcpServersConfig` initialization (`anthropics/claude-code#26259`, closed inactive without confirmed fix — round-2 finding `001-research-14`). Bridge tool calls from CoWork are intermittently dropped silently; the fallback `coworkd-log-tail` provider gives a coarser signal that is NOT improvable by prologue discipline. Re-take rate on CoWork may therefore be non-zero and non-improvable from the rig's side until Anthropic fixes the forwarding bug. Distinct from Chat/Code "weaker-but-improvable-via-prologue" — this is a structurally bounded ceiling. Spec preflight should surface a CoWork-specific advisory.
 - **Negative**: Bridge installation is permanent in the Claude-Rig profile (no ephemeral install). One bridge per profile.
 - **Negative**: New post-processing pipeline (`bin/render-webm.sh` for ffmpeg + gifski) — not as battle-tested as the CLI rig's `agg` pipeline.
@@ -487,26 +440,32 @@ Eight further decisions (bridge install lifecycle, user-data-dir strategy, recor
 - **Risk**: Model skips `rig.turn_end` due to instruction drift. Soft miss accumulates.
   **Mitigation**: System-prompt prologue is part of every Desktop spec template (`examples/desktop-*.json`). Fallback timer synthesizes turn-end with a soft-miss log entry if `pacing.turn_timeout_sec` elapses without the call. Soft-miss rate over last N recordings tracked in `~/Library/Application Support/recording-rig/quality.jsonl`; >20% triggers a doctor warning.
 
-- **Risk**: Claude Desktop UI churn breaks DOM selectors. Surface navigation fails after a Desktop update.
-  **Mitigation**: Selectors centralized in `bin/desktop-selectors.json`, version-pinned to the Desktop version observed at probe time. Doctor warns when running against a Desktop version newer than the cached probe. `--probe-surfaces` re-runs selector discovery.
+- **Risk**: Claude Desktop UI churn breaks AX selectors. Surface navigation / composer targeting fails after a Desktop update (the AX role+description of a button or the composer changes).
+  **Mitigation**: AX selectors centralized in `bin/desktop-ax-selectors.json`, version-pinned to the Desktop version observed at probe time. Doctor warns when running against a Desktop version newer than the cached probe. `--probe-surfaces` re-runs AX selector discovery. The `armWait` (re-arm + wait-for-stable) helper fails loud with the missing role/description when an element can't be found.
 
 - **Risk**: OAuth token expiry on idle Claude-Rig profile. First recording after long idle fails to launch authenticated.
   **Mitigation**: Doctor pre-record check warns "profile auth refreshed N days ago — consider launching Claude-Rig manually before recording." Recovery: user launches profile, lets refresh run, retries.
 
-- **Risk**: Playwright < 1.59.0 fails against Claude.app's Electron 41.6.1 via the `--remote-debugging-port=0` CLI-arg rejection bug (`microsoft/playwright#39008`, fixed in v1.58.1 by PR #39012). Failure mode is opaque (`bad option: --remote-debugging-port=0`) and would be misread as a signing/entitlement issue (round-2 finding `001-research-13`).
-  **Mitigation**: Plugin install instructions pin `playwright >= 1.59.0` (v1.59 also introduces `page.screencast.start/stop`). Doctor enforces the version floor with a clear error citing the issue number. `_electron.launch` should succeed once the floor is met; spike P0.5 reduced to launch-verification only.
+- **Risk**: a11y tree collapse mid-recording. Chromium drops the NSAccessibility bridge across UI re-renders / when the activating client goes idle, so a stale AX element reference fails after a navigation.
+  **Mitigation** (validated, A11): the Swift driver is ONE long-lived process holding the AX connection; it re-arms `AXManualAccessibility` and polls-until-stable (`armWait`) before every action rather than caching element handles. Fail loud on timeout.
+
+- **Risk**: synthetic input leaks to the wrong window. Global `CGEvent.post(tap:)` delivers to whatever app is system-frontmost — during validation it leaked a test prompt into the operator's terminal.
+  **Mitigation** (validated, A11): the driver NEVER uses global CGEvent. Input is element-scoped `AXValue`-set for text plus a **process-targeted** `CGEvent…postToPid(rigPid)` for the submit Return. Doctor documents this invariant; code review enforces it.
+
+- **Risk**: missing macOS permissions. AX driving needs Accessibility permission; ScreenCaptureKit needs Screen Recording permission — without them the driver silently gets an empty tree / black frames.
+  **Mitigation**: `doctor` checks `AXIsProcessTrusted()` and `CGPreflightScreenCaptureAccess()` for the controlling process and prints the exact System Settings → Privacy panes to grant before recording.
+
+- **Risk**: window geometry drift. The Claude-Rig window can revert to an unexpected size, producing inconsistent recording dimensions.
+  **Mitigation**: the driver sets `kAXSizeAttribute` to a deterministic size, reads it back, and re-asserts if it reverted, before starting capture.
 
 - **Risk**: MCPB transport changes in a future Claude Desktop release silently break the bridge. MCPB v0.4 MANIFEST.md does NOT mandate stdio — Claude Desktop chooses stdio as an implementation detail (round-2 finding `001-research-18`), and could theoretically change without a manifest version bump.
   **Mitigation**: Bridge README + §Cross-Cutting Concerns / Versioning document the stdio assumption explicitly. `doctor --verify-bridge` includes a connectivity probe (call a bridge tool, assert response shape) that catches transport-format changes as a fast doctor failure rather than a silent recording miss.
 
-- **Risk**: CoWork sub-panel capture gap. Playwright misses BrowserView frames if CoWork uses one.
-  **Mitigation**: Phase 2 (post-probe) gates the addition of ScreenCaptureKit as a parallel stream if P0.4 shows separate WebContents. Validator can source from either capture.
-
 - **Risk**: Bridge config file race. Two simultaneous recordings clobber `/tmp/recording-rig.active-session`.
   **Mitigation**: Driver refuses to launch if `active-session` exists; mirrors the CLI rig's `tmux has-session` check at `bin/record.sh:208-212`.
 
-- **Risk**: Auth deep-link collision when seeding from primary. With two Claude.app instances running, macOS LaunchServices delivers the `claude://` `GetURL` Apple Event via `NSAppleEventManager` deterministically to the **most-recently-active** instance — not probabilistically (round-2 finding `001-research-16`). The OAuth callback WILL go to whichever instance was most recently active, not "may go to the wrong one".
-  **Mitigation**: `doctor --install-profile` and `doctor --seed-from-primary` refuse to run if a non-Rig Claude.app is already running (`pgrep -f "Claude.app/Contents/MacOS/Claude"` returns a non-Rig PID). The PID check is sufficient because it enforces mutual exclusion at the OS level — no race, no luck, no need to control window focus during the OAuth flow. User-driven quit-then-resume on conflict.
+- **Risk**: Auth deep-link collision during the one-time Claude-Rig login/seed. Confirmed live (A9, 2026-05-24): with two instances running, an OAuth login on the second instance routes its `claude://` device-verification step onto the *other* instance's window (bundle-scoped deep-link handler) — observed hijacking the primary's window. Note the nuance: multi-instance *launch* coexists fine (per-`--user-data-dir` single-instance lock); only the OAuth-login flow collides.
+  **Mitigation**: `doctor --install-profile` / `--seed-from-primary` (the steps that perform an OAuth login) refuse to run if any non-Rig Claude.app is running (`pgrep -f "Claude.app/Contents/MacOS/Claude"`); user quits the primary, logs in once, resumes. **Steady-state recording does NOT require exclusion** — once the Claude-Rig `sessionKey` is valid (~28-day TTL, A7), recording triggers no OAuth, so it can run concurrently with the user's primary.
 
 - **Risk**: `extensions-installations.json` schema change invalidates the bridge install path.
   **Mitigation**: Bridge install uses the supported `open path/to/.mcpb` → Settings-UI install path (one of two surviving TUI-scrape exceptions, justified analogously to the CLI rig's `consent_sweep`). Direct manifest editing is the recovery path, not the primary.
@@ -516,58 +475,35 @@ Eight further decisions (bridge install lifecycle, user-data-dir strategy, recor
 - **Visible failure**: A required checkpoint missing in the bridge transcript → validator FAILS → no GIF rendered. Validator names the missing checkpoint.
 - **Silent failure (mitigated)**: Model skips `rig.turn_end` but produces text output. Fallback timer synthesizes turn-end; recording completes; soft-miss logged for trend analysis.
 - **Recovery**: Soft-miss aggregation surfaces drift in `diagnose`. Operator action: strengthen prologue, re-record. If soft-miss persists across prologue revisions, the Desktop backend's determinism floor for that surface/Desktop-version combo is established as the practical limit.
-- **Diagnose path**: `/recording-rig:diagnose <session>` reads the transcript, webm, sentinel timeline, and (contingent on the Phase 2 HAR/trace sub-spike landing per round-2 finding `001-research-9`) HAR + Playwright trace; surfaces (a) which expected checkpoints were called and which were missed, (b) soft-miss rate trend, (c) webm-duration vs session-wall-time delta (capture-coverage check), (d) HAR cross-check (`turn_end` call vs SSE stream close) — *only if HAR capture validated on Electron*, (e) Playwright trace path for manual inspection — *only if `context.tracing.start()` validated on Electron*. Sentinel/transcript-based diagnostics are unconditional; HAR/trace are contingent.
+- **Diagnose path**: `/recording-rig:diagnose <session>` reads the bridge transcript, the `.mov` metadata, and the sentinel timeline; surfaces (a) which expected checkpoints were called and which were missed, (b) soft-miss rate trend, (c) `.mov`-duration vs session-wall-time delta (capture-coverage check), (d) the bridge per-server log (`~/Library/Logs/Claude/mcp-server-<display_name>.log`) as a liveness signal — if the bridge log goes quiet during an active session the bridge may have crashed. HAR/Playwright-trace forensics are dropped (no CDP transport under the AX pivot).
 
 ## Implementation Plan
 
 ### Prerequisites
 
-- [ ] All Critical Assumptions A1–A10 resolved before implementation. A1, A3, A5, A6, A7, A8 verified via Phase 0 spikes. A2 partly resolved by round-2 finding `001-research-14` (Documented-Unreliable; spike P0.2 still required to characterize intermittent-failure rate). A4 partly resolved by round-2 finding `001-research-13` (Documented; spike P0.5 reduced to launch verification). A9 verified-by-inference (round-2 findings `001-research-10/16/17` — no spike needed; the mutual-exclusion guard at the rig level is the enforcement). A10 gated to Phase 2 Step 1 verification (requires driver to exist).
-- [ ] Probe results archived to T2 memory (project `recording-rig`, title `RDR-001-phase0-probes`)
-- [ ] Decisions §Technical Design §11 (per-surface coordination) and §Alternative 7 (capture pipeline) locked based on probe outcomes
+- [x] Critical Assumptions A1–A12 resolved (or non-blocking) before implementation (2026-05-24 pivot). **A11 (AX drive) and A12 (ScreenCaptureKit record) VERIFIED — Phase 2 is immediately actionable.** A1 (Code `.mcpb`) PASS, A3 (file-drop install) PASS, A6 (AX selectors) DONE. A4 FAILED → superseded by A11/A12 (Playwright dropped; no version pin). A5/A10 MOOT (page.screencast/BrowserView concern eliminated by SCK compositor capture). A9 refined (multi-instance launch coexists; OAuth-login collision → exclusion only during the one-time login/seed). **Pending but non-blocking**: A2 (CoWork `.mcpb`, P0.2 — CoWork uses the `coworkd-log-tail` fallback regardless), A7 (48h OAuth refresh, P0.7 clock running — near-certain PASS by the 28-day `sessionKey` TTL), A8 (AX install-dialog dismissal, P0.8 — does NOT block Phase 1/2 because A3 file-drop install (PASS) installs the bridge without the dialog).
+- [x] Probe results archived to T2 memory (project `recording-rig`, title `RDR-001-phase0-probes`)
+- [x] Decisions §Technical Design (per-surface coordination: Chat+Code → mcp-bridge; CoWork → coworkd-log-tail) and §Alternative 7 (ScreenCaptureKit adopted as primary capture) locked based on probe outcomes
 - [ ] `docs/design.md` updated with a new Desktop section that mirrors the determinism-gap acknowledgment in this RDR
 
 ### Minimum Viable Validation
 
-End-to-end recording of a Chat-surface session with a minimal `desktop` spec produces all expected artifacts: `.webm` (Playwright video), `.gif` + `.mp4` (ffmpeg + gifski post-process), `bridge-transcript.jsonl` (with at least one `rig.turn_end` call), and `validate.mjs` PASS verdict. Required-checkpoint omission on a re-run reproduces a deliberate FAIL with no GIF rendered. This is the single proof that the bridge → sentinels → validator → render pipeline composes end-to-end. **In scope for Phase 2 — not deferred.**
+End-to-end recording of a Chat-surface session with a minimal `desktop` spec produces all expected artifacts: `.mov` (ScreenCaptureKit/h264 capture), `.gif` + `.mp4` (ffmpeg + gifski post-process), `bridge-transcript.jsonl` (with at least one `rig.turn_end` call), and `validate.mjs` PASS verdict. Required-checkpoint omission on a re-run reproduces a deliberate FAIL with no GIF rendered. This is the single proof that the AX-drive → bridge → sentinels → validator → render pipeline composes end-to-end. **In scope for Phase 2 — not deferred.**
 
 ### Phase 0: Probes (no code shipped)
 
-Eight spikes; results to scratch tag `recording-rig-desktop-phase0-results` and to T2 memory.
+**Largely executed 2026-05-24** (results in T2 `recording-rig/RDR-001-phase0-probes` + the per-topic findings; scratch tag `recording-rig-desktop-phase0-results`). The probes resolved the architecture pivot — see §Revision History. Status:
 
-#### Step 1: P0.1 — `.mcpb` reachable in Code
+- **P0.1 — `.mcpb` reachable in Code (A1): PASS.** Probe `.mcpb` `recording-rig-probe` (tool `probe_distinctive_marker_42`) invoked from a Code session, returned the marker. → Code uses `mcp-bridge`.
+- **P0.2 — `.mcpb` reachable in CoWork (A2): PENDING.** Documented-unreliable (`001-research-14` race); when run, MUST repeat ≥10× to characterize the intermittent-failure rate. CoWork fallback (`coworkd-log-tail`) is needed regardless.
+- **P0.3 — File-drop install (A3): PASS.** Unpacked `.mcpb` + `extensions-installations.json` (per `001-research-8` schema) loaded in a logged-in profile. Doctor recovery path confirmed.
+- **P0.4 — WebContents count: MOOT.** Was about whether `page.screencast` misses sub-panels; ScreenCaptureKit captures the whole window's compositor output by `windowID`, so the question no longer matters.
+- **P0.5 — driver launch (A4): FAIL → pivot.** Claude.app blocks the Chromium remote-debugging transports Playwright requires (anti-automation guard). Replaced by AX drive (A11) + ScreenCaptureKit (A12), both validated this phase.
+- **P0.6 — selector discovery: DONE, reframed DOM→AX (A6).** AX tree exposes named elements (composer, Chat/Code/Cowork buttons); pin to `bin/desktop-ax-selectors.json`.
+- **P0.7 — long-idle OAuth refresh (A7): IN PROGRESS.** Clock running; near-certain PASS (28-day `sessionKey` TTL ≫ 48h). No `main.log` exists — observable is logged-in-vs-onboarding on relaunch.
+- **P0.8 — install-dialog dismissal (A8): PENDING, reframed to AX.** `open ...mcpb` opens the dialog (used in P0.1/P0.3); dismissal via AX (`armWait` + `AXPress`), not Playwright DOM.
 
-Install a probe `.mcpb` (`recording-rig-probe`, single tool `probe.distinctive_marker_42`) in the Claude-Rig profile. Start a Code session in a trusted folder. Ask the model: "Please call the probe.distinctive_marker_42 tool and report what it returns." Observe whether the tool is listed, callable, and returns successfully. Result: PASS / FAIL / DISABLED-WITH-ERROR.
-
-#### Step 2: P0.2 — `.mcpb` reachable in CoWork
-
-Same as P0.1 but in a CoWork session. Tests whether the vsock RPC layer proxies host extension tool calls into the VM model context.
-
-#### Step 3: P0.3 — File-drop install viability
-
-Without using Settings UI: write probe `.mcpb` files directly to `Claude Extensions/`, edit `extensions-installations.json` to register, restart Desktop, verify extension loads. Informs the recovery path for §Risk "extensions-installations.json schema change".
-
-#### Step 4: P0.4 — WebContents count during CoWork
-
-Launch Claude-Rig with `--remote-debugging-port=9222`. Open `chrome://inspect` in another browser. Start a CoWork session. Count WebContents/BrowserView targets. Determines whether ScreenCaptureKit is needed in addition to Playwright's screencast.
-
-#### Step 5: P0.5 — Electron version compatibility
-
-Already partially done (Claude.app Electron is 41.6.1). Pin a Playwright version, run `_electron.launch` against Claude.app, confirm launch succeeds. Report Playwright version + Electron support matrix.
-
-#### Step 6: P0.6 — DOM selector discovery
-
-With `--remote-debugging-port=9222`, navigate each surface (Chat / Code / CoWork). Use DevTools to identify stable selectors for sidebar nav, surface input, send button. Capture to `bin/desktop-selectors.json` with `claude_desktop_version: "1.8555.2"` keyed entry.
-
-#### Step 7: P0.7 — Long-lived profile auth refresh
-
-Launch Claude-Rig, log in interactively (or seed from primary). Leave idle 48h. Relaunch and observe `main.log` for successful OAuth refresh without re-auth. Sets the doctor's auth-staleness warning threshold.
-
-#### Step 8: P0.8 — Bridge install via `open path/to/.mcpb`
-
-Manually verify: `open recording-rig-bridge.mcpb` triggers Claude Desktop's install dialog reliably. Identify DOM locators for the install-confirmation button. Confirm dismiss can be sentinel-driven from a Playwright script.
-
-**Phase 0 gate**: probe report → T2 memory. Decisions §Technical Design §11 and §Alternative 7 are locked based on results. If A1 or A2 fail, the pessimistic-case fallback providers (file-mtime-watch / coworkd-log-tail) move from "designed for but unimplemented" to "must implement in phase 4".
+**Phase 0 gate**: probe report → T2 (done). The pivot is locked: §Technical Design and §Alternative 7 (ScreenCaptureKit adopted) reflect the AX + SCK stack. Remaining open probes (P0.2, P0.7, P0.8) are non-blocking for the Phase 1/2 bridge + driver work: P0.2 → CoWork uses the `coworkd-log-tail` fallback regardless; P0.7 → near-certain PASS by the 28-day `sessionKey` TTL; P0.8 → A3 file-drop install (PASS) installs the bridge without the AX-dismiss flow.
 
 ### Phase 1: Bridge MCPB
 
@@ -591,23 +527,31 @@ Package as `.mcpb`. Install into the Claude-Rig profile manually for phase 1; in
 
 ### Phase 2: Driver + capture pipeline (Chat-only)
 
-#### Step 1: `bin/desktop-driver.mjs`
+#### Step 1: `bin/desktop-driver` (Swift)
 
-Node ES module. Pins `playwright >= 1.59.0` (round-2 finding `001-research-13` — required for both Electron 30+ launch fix and `page.screencast` API). `_electron.launch({ executablePath, args, env, timeout })` — NOT `recordVideo`/`recordHar`/`tracesDir` (those are `browser.newContext()` options, not Electron-launch options — round-2 finding `001-research-9`). Pre-launch: write `/tmp/recording-rig.active-session`, write `/tmp/${SESSION}.rig-config.json`. Obtain recording page via `electronApp.firstWindow()` for normal surface navigation. **Install-dialog flow (P0.8)** is separate: subscribe to `electronApp.on('window', ...)` and inspect `electronApp.windows()` because the install dialog may open as a new `BrowserWindow` post-launch (`001-research-19` / A8 refinement) — `firstWindow()` alone will miss it. Navigate to Chat surface via `bin/desktop-selectors.json["sidebar.chat"]`. Type prompt via `locator(input).fill()` + `locator(send).click()`. Atomically write `/tmp/${SESSION}.prompt-submitted` immediately after send. Screencast: `await page.screencast.start({ path: webmPath, fps })` before paste; `await page.screencast.stop()` before teardown. **A10 spike happens here** — a minimal "launch + screencast.start + click + screencast.stop + verify .webm playable" probe MUST land before the full driver, to catch any Electron-41-specific screencast issue early. HAR + tracing for Electron are gated to a separate sub-spike (validate `context.tracing.startHar()` / `.start()` on a context derived from the Electron app — `001-research-9`); if not validated, ship without HAR/trace and document the diagnose-feature gap. Watch sentinels via ported `sentinel_wait_idle()`. Teardown: `electronApp.close()`, unlink active-session.
+Compiled Swift helper (AXUIElement + ScreenCaptureKit are Cocoa APIs; `swiftc` present, pyobjc absent). All primitives validated in Phase 0 (A11/A12). At startup: `NSApplication.shared.setActivationPolicy(.accessory)` (else CG/SCK calls crash `CGS_REQUIRE_INIT`). `record.sh` launches the app via LaunchServices (`open -n -a Claude --user-data-dir=<Claude-Rig> --force-renderer-accessibility`) and passes the resolved Claude-Rig PID to the helper. The helper:
+- **Attaches AX**: `AXUIElementSetAttributeValue(app, "AXManualAccessibility", true)` from this long-lived process (holds the connection). **Invariant 1**: re-arm + poll-until-element-present (`armWait`) before EVERY action — a11y collapses across UI re-renders.
+- **Window geometry**: set `kAXSizeAttribute` to a deterministic size (e.g. 1280×800); verify + re-assert (it can revert).
+- **Navigate**: `AXPress` the named surface button (`AXButton` desc="Chat") — selectors in `bin/desktop-ax-selectors.json`.
+- **Input + submit**: set composer `AXValue` (target by surface-specific `AXDescription`, e.g. "Write your prompt to Claude"); then **Invariant 2** — post a *process-targeted* Return (`CGEvent(virtualKey: 0x24).postToPid(rigPid)`), NEVER a global `CGEvent.post(tap:)` (it leaks to the focused app). Then atomically write `/tmp/${SESSION}.prompt-submitted`.
+- **Record**: ScreenCaptureKit — `SCShareableContent` filtered by `owningApplication.processID` → `SCContentFilter(desktopIndependentWindow:)` → `SCStream` + `AVAssetWriter` (h264 `.mov`); start the writer session on the first frame's PTS, before first paste; stop + `finishWriting()` before teardown. One-shot final-frame thumbnail via `SCScreenshotManager`.
+- **Install-dialog flow (P0.8)**: `open path/to/.mcpb` → locate the dialog's install control in the AX tree (`armWait` + `AXPress`). No Playwright DOM.
+
+Sentinel watch stays in `record.sh`/shell (ported `sentinel_wait_idle()`); the bridge writes `turn-end`/`checkpoint`/`gate-pending`, the helper writes `prompt-submitted`. Teardown: stop SCStream + `finishWriting()` (flushes `.mov`), quit the Claude-Rig instance, unlink `active-session`. Requires Accessibility + Screen Recording permission for the controlling process (doctor checks both).
 
 #### Step 2: `bin/render-webm.sh`
 
-ffmpeg + gifski pipeline: `.webm → .mp4 + .gif`. Gated behind validation pass (mirrors CLI rig's gate against `agg`).
+ffmpeg + gifski pipeline: `.mov (h264) → .mp4 + .gif`. Gated behind validation pass (mirrors CLI rig's gate against `agg`).
 
 #### Step 3: Backend dispatch in `record.sh`
 
-Insert `case "$BACKEND" in cli) ... ;; desktop) exec node bin/desktop-driver.mjs "$SPEC" ;; esac` after shared preflight (identifier regex validation, sentinel_clear_all, SESSION resolution) and before tmux/asciinema setup. Shared steps run for both backends.
+Insert `case "$BACKEND" in cli) ... ;; desktop) launch Claude-Rig + exec bin/desktop-driver "$SPEC" ;; esac` after shared preflight (identifier regex validation, sentinel_clear_all, SESSION resolution) and before tmux/asciinema setup. Shared steps run for both backends. `record.sh` owns the launch (`open -n`), the `active-session`/`rig-config` writes, and the sentinel watch; the Swift helper owns AX-drive + capture.
 
 #### Step 4: Chat-surface examples
 
 `examples/desktop-chat.json` — minimal Chat-only spec with one command, one checkpoint, basic validation.
 
-**Phase 2 gate**: end-to-end record of `examples/desktop-chat.json` produces `.webm`, `.gif`, `.mp4`, bridge transcript, validator PASS. A deliberately broken spec (missing required checkpoint) produces validator FAIL and no GIF.
+**Phase 2 gate**: end-to-end record of `examples/desktop-chat.json` produces `.mov`, `.gif`, `.mp4`, bridge transcript, validator PASS. A deliberately broken spec (missing required checkpoint) produces validator FAIL and no GIF.
 
 ### Phase 3: Validation extensions + diagnose integration
 
@@ -621,7 +565,7 @@ Insert `case "$BACKEND" in cli) ... ;; desktop) exec node bin/desktop-driver.mjs
 
 #### Step 3: Diagnose webm/transcript/trace forensics
 
-Extend `commands/diagnose.md` skill: read transcript, webm metadata, sentinel timeline (always). Surface missing-checkpoint reports, soft-miss trends, capture-coverage check. **HAR cross-check and Playwright trace path are contingent on the Phase 2 HAR/trace sub-spike landing** (per round-2 finding `001-research-9` — `_electron.launch` doesn't accept these directly; Electron-context HAR/tracing feasibility is unvalidated). If the sub-spike fails or is deferred, diagnose ships without HAR/trace and the feature gap is documented in `commands/diagnose.md`.
+Extend `commands/diagnose.md` skill: read bridge transcript, `.mov` metadata, sentinel timeline (always). Surface missing-checkpoint reports, soft-miss trends, capture-coverage check (`.mov` duration vs session wall-time), and the bridge per-server log (`~/Library/Logs/Claude/mcp-server-<display_name>.log`) as a liveness signal. No HAR/Playwright-trace forensics (no CDP transport under the AX pivot).
 
 **Phase 3 gate**: required-checkpoint failure produces no GIF; soft-miss only produces GIF + warning; diagnose surfaces both with usable forensic output.
 
@@ -629,7 +573,7 @@ Extend `commands/diagnose.md` skill: read transcript, webm metadata, sentinel ti
 
 #### Step 1: Surface support
 
-Add `bin/desktop-selectors.json` entries for Code and CoWork surface inputs, sidebar nav, send. Driver navigates per `desktop.surface`.
+Add `bin/desktop-ax-selectors.json` entries (AX role + AXDescription/AXTitle) for Code and CoWork surface composers, sidebar nav, send. Driver navigates per `desktop.surface` via `AXPress` + `armWait`.
 
 #### Step 2: Coordination provider implementations
 
@@ -656,7 +600,7 @@ Reject specs that use `gates[]` or `desktop.checkpoints[].required: true` on sur
 
 #### Step 1: `/recording-rig:doctor` extensions
 
-Add subcommands: `--install-bridge` (build + install bridge MCPB), `--install-profile` (create Claude-Rig dir, interactive login wait), `--seed-from-primary` (auth-state copy), `--probe-surfaces` (per-surface MCP probe). Standard checks add Desktop-mode validations: Playwright installed, Electron-version compat, Claude.app present, profile exists, bridge installed, probe cache fresh (<30d).
+Add subcommands: `--install-bridge` (build + install bridge MCPB), `--install-profile` (create Claude-Rig dir, interactive login wait — refuses if a non-Rig Claude.app is running, per the A9 OAuth-collision risk), `--seed-from-primary` (auth-state copy), `--probe-surfaces` (per-surface MCP probe + AX selector discovery). Standard checks add Desktop-mode validations: `swiftc` present (build the driver), Claude.app present, **Accessibility permission** (`AXIsProcessTrusted()`) and **Screen Recording permission** (`CGPreflightScreenCaptureAccess()`) granted, profile exists, bridge installed, AX-selector + probe cache fresh (<30d).
 
 #### Step 2: `/recording-rig:author` extensions
 
@@ -693,7 +637,8 @@ Bump `plugin.json`, update `CHANGELOG.md`, tag `v0.2.0` per `docs/RELEASE.md`. T
 
 | Dependency | License | Legal Review |
 | --- | --- | --- |
-| `playwright` (Node) | Apache 2.0 | Standard OSS |
+| Swift toolchain (`swiftc`) — builds `bin/desktop-driver` | Apache 2.0 (Swift) | Ships with Xcode / Command Line Tools; system-provided on macOS |
+| AXUIElement + ScreenCaptureKit + AVFoundation | Apple system frameworks | First-party macOS frameworks; no third-party dependency (replaces the Playwright dependency from the original design) |
 | `ffmpeg` (system binary) | LGPL / GPL (depending on build) | Standard OSS |
 | `gifski` (system binary) | AGPL-3.0 | Compatible with this project's AGPL-3.0-or-later license |
 | Bridge MCPB Node runtime | Bundled with Claude Desktop (no separate install) | N/A |
@@ -702,8 +647,9 @@ Bump `plugin.json`, update `CHANGELOG.md`, tag `v0.2.0` per `docs/RELEASE.md`. T
 
 Test scenarios cover each phase's gate plus cross-cutting failure modes.
 
-- **Scenario**: P0.1 probe outcome PASS → all three coordination providers degrade to `mcp-bridge` — **Verify**: spec with `coordination: "auto"` on Code resolves to `mcp-bridge` per doctor's cached probe.
-- **Scenario**: P0.1 probe outcome FAIL → Code coordination resolves to `file-mtime-watch` — **Verify**: same spec resolves differently; preflight rejects gated specs targeting Code.
+- **Scenario**: Code coordination (A1 PASS) — **Verify**: a spec with `coordination: "auto"` on Code resolves to `mcp-bridge` per doctor's cached probe.
+- **Scenario**: CoWork coordination (A2 fallback) — **Verify**: a spec with `coordination: "auto"` on CoWork resolves to `coworkd-log-tail`; preflight rejects gated specs (`gates[]` / required checkpoints) targeting CoWork.
+- **Scenario**: AX submit recipe — **Verify**: `AXValue`-set + process-targeted Return submits a prompt and the response is readable in the AX tree; a global `CGEvent.post(tap:)` is never used (code review / lint).
 - **Scenario**: End-to-end Chat recording with all required checkpoints called — **Verify**: validator PASSES; `.gif` + `.mp4` rendered; bridge transcript contains expected calls in order.
 - **Scenario**: End-to-end Chat recording with one required checkpoint omitted — **Verify**: validator FAILS; no GIF rendered; error message names the missing checkpoint.
 - **Scenario**: Model skips `rig.turn_end` for entire recording — **Verify**: fallback timer fires; recording completes with soft-miss logged; quality.jsonl entry added.
@@ -717,7 +663,7 @@ Test scenarios cover each phase's gate plus cross-cutting failure modes.
 ### Testing Strategy
 
 1. **Scenario**: Phase-0 probe report archived to T2 with PASS/FAIL per assumption.
-   **Expected**: A1–A8 each marked Verified or Unverified-with-reason; decisions §Technical Design §11 and §Alternative 7 locked.
+   **Expected**: A1–A12 each marked Verified / Superseded / Pending-with-reason (done 2026-05-24); §Technical Design and §Alternative 7 (ScreenCaptureKit adopted) reflect the AX + SCK pivot.
 
 2. **Scenario**: Phase-1 bridge integration test — record a single-turn Chat spec end-to-end manually.
    **Expected**: All four bridge tools observable in transcript; sentinels appear at expected paths.
@@ -741,23 +687,36 @@ Comparison metric is "re-take rate," not throughput. Existing CLI rig achieves z
 
 ### Contradiction Check
 
-[To be filled at gate time. Expected: "No contradictions found between research findings, design principles, and proposed solution." If `.mcpb`-in-Code/CoWork probes resolve negatively, the pessimistic-case design path activates without contradicting the architecture.]
+**No remaining contradictions (re-checked 2026-05-24, post-pivot).** The architecture pivot (Playwright/CDP → AXUIElement + ScreenCaptureKit, triggered by the A4 FAIL in P0.5) was threaded through every design section: §Approach, §Technical Design (diagram + driver recipe), §Alternatives (ScreenCaptureKit adopted; network-interception/DOM-polling reframed as transport-unavailable), §Risks, §Implementation Plan phases, §New Dependencies, §API Verification, §Cross-Cutting, §References. Two pre-pivot research entries in §Key Discoveries — `001-research-13` ("pin `playwright >= 1.59.0`") and `001-research-19` ("Playwright DOM dismissal for the install dialog") — prescribed Playwright machinery that the design has since rejected; both are annotated inline as **[SUPERSEDED by A4 FAIL / 2026-05-24 pivot]** so they read as historical research, not live requirements. All other Playwright mentions in the document are explicitly framed as the rejected/superseded approach. The coordination design is consistent: A1 PASS → Chat + Code use `mcp-bridge`; CoWork (A2 documented-unreliable, pending) uses the `coworkd-log-tail` fallback — no contradiction with the provider-polymorphic architecture.
 
 ### Assumption Verification
 
-[Confirm A1–A10 resolved. After round-2: A2 Documented-Unreliable (`001-research-14`, pessimistic fallback mandatory), A4 Documented (`001-research-13`, pin `playwright >= 1.59.0`), A8 refined (`001-research-19`, use `windows()` not `firstWindow()` for install dialog), A9 verified-by-inference (`001-research-10/16/17`), A10 gated to Phase 2 Step 1 spike. A1/A3/A5/A6/A7/A8 still gated to Phase 0 spikes.]
+**Post-pivot assumption state (2026-05-24):**
+- **A1** (`.mcpb` reachable in Code) — **VERIFIED** (P0.1 PASS). → Code uses `mcp-bridge`.
+- **A2** (`.mcpb` reachable in CoWork) — **PENDING** (P0.2), Documented-Unreliable (`001-research-14`). Non-blocking: CoWork uses `coworkd-log-tail` fallback regardless of outcome.
+- **A3** (file-drop install) — **VERIFIED** (P0.3 PASS). Doctor recovery path confirmed.
+- **A4** (Playwright `_electron.launch`) — **FAILED / SUPERSEDED** (P0.5). Claude.app blocks the Chromium remote-debugging transports Playwright requires. Playwright dropped from the design; **no version pin applies** (supersedes `001-research-13`). Replaced by A11/A12.
+- **A5** (single BrowserWindow / page.screencast coverage) — **MOOT / SUPERSEDED**. ScreenCaptureKit captures the window's compositor output by `windowID`; the sub-panel concern is eliminated. P0.4 unnecessary.
+- **A6** (selectors discoverable + pinnable) — **VERIFIED**, reframed DOM → AX (named AX elements exposed).
+- **A7** (long-idle OAuth refresh) — **IN PROGRESS** (P0.7 clock running). Near-certain PASS: `sessionKey` ~28-day TTL ≫ 48h. Non-blocking.
+- **A8** (install-dialog dismissal) — **PENDING** (P0.8), reframed to AX (`armWait` + `AXPress`, not Playwright DOM — supersedes `001-research-19`). Non-blocking for Phase 1/2: A3 file-drop install (PASS) installs the bridge without the dialog.
+- **A9** (cross-instance disambiguation) — **REFINED / VERIFIED**. Multi-instance launch coexists (per-`--user-data-dir`); OAuth login on a 2nd instance collides → exclusion required only during the one-time login/seed, not steady-state recording.
+- **A10** (`page.screencast` on Electron) — **MOOT / SUPERSEDED** (Playwright path dead; recording via ScreenCaptureKit, A12).
+- **A11 (new)** (AX drive) — **VERIFIED**. `AXManualAccessibility` activation + `AXPress` nav + `AXValue`+`postToPid` Return submit + `kAXSizeAttribute` geometry, all spike-confirmed end-to-end.
+- **A12 (new)** (ScreenCaptureKit record) — **VERIFIED**. h264 `.mov`, 94 frames/3s, ffprobe-confirmed.
+
+Load-bearing assumptions for the new architecture (A11, A12) are VERIFIED, so Phase 2 is immediately actionable. The three pending assumptions (A2, A7, A8) are all explicitly non-blocking.
 
 #### API Verification
 
 | API Call | Library | Verification |
 | --- | --- | --- |
-| `_electron.launch({ executablePath, args, cwd, env, timeout })` — five-option signature only | playwright (v1.59+) | Source Search (Context7 `/microsoft/playwright` `docs/src/electron-api/class-electron.md`); round-2 finding `001-research-9` corrects earlier sketch that included `recordVideo`/`recordHar`/`tracesDir` (those belong to `browser.newContext()`) |
-| `page.screencast.start({ path, fps })` / `.stop()` (per-page, not launch option) | playwright (v1.59+) | Source Search (Context7); `001-research-13` confirms v1.59.0 release date |
-| `electronApp.firstWindow()`, `windows()`, `.on('window', ...)`, `.evaluate()` | playwright | Source Search (Context7); `001-research-19` requires `windows()` + `'window'` event for install-dialog detection |
-| `context.tracing.startHar()` / `.start()` on a context derived from the Electron app | playwright | **Sub-spike required** (Phase 2) — feasibility for Electron contexts unvalidated per `001-research-9`; defer or drop HAR/trace if spike fails |
-| `_electron.launch` against Claude.app v1.8555.2 (Electron 41.6.1) with `playwright >= 1.59.0` | playwright + electron | Documented (`001-research-13`: blocker `microsoft/playwright#39008` fixed in v1.58.1 by PR #39012); Spike P0.5 reduced to launch verification |
-| `.mcpb` manifest v0.4 schema | mcpb | Source Search (`github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md`, `001-research-18` notes transport is implementation-defined, not spec-mandated) |
-| Bridge tool callability per surface | claude-desktop | Spike (P0.1 for Code; `001-research-14` already Documents the P0.2/CoWork race) |
+| `AXUIElementSetAttributeValue(app, "AXManualAccessibility", true)` activates the renderer a11y tree | ApplicationServices (AX) | **Spike-verified (A11)** — full UI tree exposed (≈265–371 named nodes) only with this set, held by a long-lived process; `--force-renderer-accessibility` flag alone is insufficient |
+| `AXUIElementPerformAction(elem, kAXPressAction)` ; `AXUIElementSetAttributeValue(composer, kAXValueAttribute, text)` ; `kAXSizeAttribute` | ApplicationServices (AX) | **Spike-verified (A11)** — navigation, composer text-set, and window geometry all confirmed against the live app |
+| `CGEvent(virtualKey: 0x24).postToPid(rigPid)` for the submit Return (process-targeted) | CoreGraphics | **Spike-verified (A11)** — submit confirmed end-to-end (response read back via AX). `AXValue`-set alone is inert; global `CGEvent.post(tap:)` leaks (forbidden) |
+| `SCShareableContent` → `SCContentFilter(desktopIndependentWindow:)` → `SCStream` + `AVAssetWriter` ; `SCScreenshotManager` | ScreenCaptureKit + AVFoundation | **Spike-verified (A12)** — h264 `.mov`, 94 frames / 3 s, ffprobe-confirmed. CLI tool must init `NSApplication.shared` (`.accessory`) to avoid `CGS_REQUIRE_INIT` |
+| `.mcpb` manifest v0.4 schema + `extensions-installations.json` file-drop | mcpb / claude-desktop | Source Search (`mcpb/MANIFEST.md`) + **Spike-verified (A3, file-drop install loads)** |
+| Bridge tool callability per surface | claude-desktop | **Spike-verified (A1, P0.1 PASS for Code)**; `001-research-14` documents the P0.2/CoWork race (pending) |
 
 ### Scope Verification
 
@@ -765,9 +724,9 @@ Minimum Viable Validation is defined under [Implementation Plan / Minimum Viable
 
 ### Cross-Cutting Concerns
 
-- **Versioning**: Bridge MCPB version + Desktop bundle version pinned in `bin/desktop-selectors.json` and `probe-cache.json`. Doctor warns on Desktop version drift. New Desktop backend triggers `recording-rig` major-version bump (v0.2.0).
-- **Build tool compatibility**: Bridge ships as Node MCPB (Node bundled with Claude Desktop). Driver is Node ES module. No new build toolchain.
-- **Licensing**: All new dependencies (Playwright, ffmpeg, gifski) compatible with `AGPL-3.0-or-later`. gifski is AGPL-3.0 — same family.
+- **Versioning**: Bridge MCPB version + Desktop bundle version pinned in `bin/desktop-ax-selectors.json` and `probe-cache.json`. Doctor warns on Desktop version drift. New Desktop backend triggers `recording-rig` major-version bump (v0.2.0).
+- **Build tool compatibility**: Bridge ships as Node MCPB (Node bundled with Claude Desktop). The Desktop driver is a compiled Swift binary (`swiftc`, system-provided) using Apple frameworks only — built by `doctor`/CI, no third-party runtime.
+- **Licensing**: New dependencies (Swift toolchain Apache-2.0; Apple system frameworks; ffmpeg; gifski AGPL-3.0) all compatible with `AGPL-3.0-or-later`. The Playwright (Node) dependency from the original design is dropped.
 - **Deployment model**: Plugin install via marketplace (see `docs/RELEASE.md`). Bridge install via `doctor --install-bridge` (Settings-UI-mediated). Claude-Rig profile install via `doctor --install-profile`.
 - **IDE compatibility**: N/A.
 - **Incremental adoption**: Users opt in by writing `backend: "desktop"` in a spec. Default `cli` is unchanged. Existing specs continue to work.
@@ -785,9 +744,13 @@ The architecture is sized for a real cross-surface recording backend, not a quic
 - [`../../CHANGELOG.md`](../../CHANGELOG.md) — version history.
 - [Anthropic engineering blog — Desktop Extensions](https://www.anthropic.com/engineering/desktop-extensions) — `.mcpb` rationale, install flow.
 - [MCPB MANIFEST.md](https://github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md) — manifest schema v0.4.
-- [Playwright Electron API](https://playwright.dev/docs/api/class-electron) — `_electron.launch` (five-option signature), `page.screencast.start/stop`, `electronApp.firstWindow()` / `windows()` / `.on('window', ...)`.
-- [Playwright issue #10369](https://github.com/microsoft/playwright/issues/10369) — closed "not planned": cannot attach to running Electron process.
-- [Playwright issue #39008 + PR #39012](https://github.com/microsoft/playwright/issues/39008) — Electron 30+ `--remote-debugging-port=0` blocker; fixed in v1.58.1 (2026-01-30); informs A4 Playwright >= 1.59.0 pin.
+- [Apple — Accessibility (AXUIElement)](https://developer.apple.com/documentation/applicationservices/axuielement_h) and [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit) — the validated drive + record stack (A11/A12).
+- Playwright/CDP (original design, now rejected — A4/P0.5): Claude.app blocks `--remote-debugging-port`/`--remote-debugging-pipe`, so `_electron.launch` cannot attach. Retained only as historical context in §Key Discoveries / §Alternatives.
+- T2 `recording-rig/claude-app-blocks-remote-debugging-flags-2026-05-24` — the CDP guard (A4 FAIL).
+- T2 `recording-rig/claude-app-ax-driving-viable-2026-05-24` and `…-ax-input-submit-mechanism-2026-05-24` — AX drive recipe + the global-CGEvent safety rule (A11).
+- T2 `recording-rig/claude-app-screencapturekit-recording-viable-2026-05-24` — SCK recording (A12).
+- T2 `recording-rig/claude-app-multi-instance-per-userdatadir-2026-05-24` — multi-instance + OAuth-collision (A9).
+- T2 `recording-rig/RDR-001-phase0-probes` — per-probe results (P0.1/P0.3/P0.5 …).
 - [`anthropics/claude-code` issue #20377](https://github.com/anthropics/claude-code/issues/20377) and [#26259](https://github.com/anthropics/claude-code/issues/26259) — `.mcpb` desktop extensions not reliably forwarded to CoWork VM (race in `remoteMcpServersConfig`); informs A2 Documented-Unreliable.
 - [`anthropics/claude-code` issue #41836](https://github.com/anthropics/claude-code/issues/41836) — no MCP session/conversation identifier echoed; informs `001-research-15`.
 - [`anthropics/claude-code` issue #42453](https://github.com/anthropics/claude-code/issues/42453) — confirms legacy `mcpServers`-path tools disabled in Code/CoWork; `.mcpb`-path unconfirmed.
@@ -801,3 +764,5 @@ The architecture is sized for a real cross-surface recording backend, not a quic
 - 2026-05-23 — Round 2 research findings appended to Key Discoveries (20 entries, `001-research-1` through `001-research-20`). Critical Assumptions table updated: A2 weakened (Unverified → Documented-Unreliable, race-condition bug in CoWork `.mcpb` delivery), A4 strengthened (Unverified → Documented, Playwright >= 1.59.0 hard prerequisite), A8 refined (use `windows()` not `firstWindow()` for install dialog), A9 added (mutual exclusion across instances verified by inference), A10 added (page.screencast on Electron unverified). Notable refutation: vsock CID=2 collision risk surfaced in round 1 is REFUTED by per-VM namespacing (Apple Virtualization framework). Notable gap (resolved in next revision): Phase 2 Step 1 driver sketch passed `recordVideo`/`recordHar`/`tracesDir` to `_electron.launch` — those belong to `browser.newContext`.
 - 2026-05-23 — Round 2 follow-up: two additional findings recorded (`001-research-21` vsock third-party host listener impossibility on Apple Virtualization; `001-research-22` MCP servers always run on host as `Claude Helper (Plugin)` stdio children, invariant across surfaces) — total 22 round-2 entries. Cross-project T2 entry written to `nexus/cowork-vsock-third-party-host-listener-impossible-2026-05-23` validating nexus RDR-126's SDK-transport decision.
 - 2026-05-23 — Gate v1 → BLOCKED (3 Critical, 4 Significant text issues; substantive-critic report). Fixes applied in-place: (1) Phase 2 Step 1 + driver-launch sketch + API Verification table corrected to the five-option `_electron.launch` signature with separate `page.screencast.start/stop` and contingent HAR/trace notes; (2) `electronApp.windows()` + `'window'` event subscription added for install-dialog flow (A8 refinement); (3) OAuth deep-link risk re-worded from "may go to wrong instance" to "WILL go to most-recently-active instance (deterministic per macOS LaunchServices)"; (4) MCPB transport-silence risk added to §Risks; (5) CoWork pessimistic-case race-condition ceiling added to §Consequences; (6) Phase 0 Prerequisites updated A1–A8 → A1–A10 with per-assumption status; (7) HAR/trace forensics in Failure Modes and Phase 3 Step 3 marked contingent on Phase 2 sub-spike. Ready for re-gate.
+- 2026-05-23 — Gate v2 → PASSED. RDR accepted; status draft → accepted. 39-bead execution plan created (epic `rr-enu`, Phase 0–5 coordinators + 32 leaves), `nx_plan_audit` PASS, `nx_enrich_beads` applied.
+- 2026-05-24 — **Architecture pivot: Playwright/CDP → AXUIElement + ScreenCaptureKit.** Phase 0 spikes run against the live app (Claude.app v1.8555.2, Electron 41.6.1). **P0.1 PASS** (A1: `.mcpb` reachable in Code → Code uses `mcp-bridge`). **P0.3 PASS** (A3: file-drop install honored → doctor recovery path). **P0.5 FAIL, architecture-invalidating** (A4): Claude.app ships an anti-automation guard that `app.quit()`s on either Chromium remote-debugging transport (`--remote-debugging-port`/`--remote-debugging-pipe`) — Playwright `_electron.launch` uses exactly those, so it cannot attach, version-independently. Pivot validated end-to-end: **A11** (AX drive — `AXManualAccessibility` activation, `AXPress` nav, `AXValue`+`postToPid` Return submit, `kAXSizeAttribute` geometry) and **A12** (ScreenCaptureKit → h264 `.mov`, 94 frames/3s verified). A5/A10 SUPERSEDED (page.screencast/BrowserView concern moot under SCK's compositor capture); A6 reframed DOM→AX selectors (verified — named elements exposed); A8 dismissal reframed to AX; A9 refined (multi-instance launch coexists; OAuth-login collision confirmed). Driver implementation: a Swift helper (`bin/desktop-driver`) does AX + SCK; `record.sh` (shell/Node) orchestrates. Two driver invariants: (i) re-arm a11y + wait-for-stable before each action from one long-lived process; (ii) process-targeted input only (`postToPid`), never global CGEvent (it leaks to the focused app — observed). ASCII architecture diagram replaced with `RDR-001-architecture.svg`. Findings in T2: `recording-rig/{RDR-001-phase0-probes, claude-app-blocks-remote-debugging-flags, claude-app-multi-instance-per-userdatadir, claude-app-ax-driving-viable, claude-app-ax-input-submit-mechanism, claude-app-screencapturekit-recording-viable}-2026-05-24`. P0.2 (CoWork) and P0.7 (OAuth 48h) still pending; P0.4/P0.6/P0.8 reshaped/absorbed by the AX pivot. Ready for re-gate.
