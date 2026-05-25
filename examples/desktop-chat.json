@@ -10,7 +10,7 @@
       { "name": "greeted", "required": true }
     ]
   },
-  "system_prompt_prologue": "You are being recorded by recording-rig. Use these EXACT tool names (underscores, not dots): after you have written your greeting, call the rig_checkpoint tool with name \"greeted\". As the very last action of your turn, call rig_turn_end.",
+  "system_prompt_prologue": "Please use these tools as you work: right after you write your greeting, call the rig_checkpoint tool with name \"greeted\"; then, as your final step, call the rig_turn_end tool.",
   "gates": [],
   "validate": {
     "must_contain": ["greeted"],
@@ -20,6 +20,7 @@
     "idle_seconds": 8,
     "turn_timeout_sec": 120,
     "exit_hold_sec": 8,
+    "attach_gap_sec": 15,
     "tmux_size": "1280x800"
   }
 }
