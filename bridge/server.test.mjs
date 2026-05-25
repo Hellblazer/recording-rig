@@ -1,44 +1,54 @@
 // SPDX-License-Identifier: MIT
 //
-// rr-2pp.2.1 — bridge skeleton tests (RDR-001 Phase 1 Step 1).
-// Written first (TDD). Drives bridge/server.js over stdio JSON-RPC and asserts
-// the skeleton contract: initialize protocol echo + downgrade, exactly the four
-// rig_* tools, each tool's RDR-pinned stub result shape, manifest/tools parity.
+// recording-rig-bridge tests (RDR-001 Phase 1). Drives bridge/server.js over
+// stdio JSON-RPC and asserts the wire contract end to end:
+//   2.1  skeleton: initialize echo/downgrade, the four rig_* tools, manifest parity
+//   2.2  sentinel writes (atomic .partial+rename) + transcript JSONL
+//   2.3  active-session pointer resolution, orphan log, rig-config gate answers
 //
-// Skeleton scope only: stub returns. Sentinel writes (2.2) and rig-config
-// gate answers (2.3) are NOT exercised here.
+// Tests are hermetic: each spawns the server with RIG_TMP pointed at a fresh
+// temp dir, so the GLOBAL active-session pointer and orphan log never collide
+// across tests and cleanup is a single rmSync. The bridge is a fresh PID per
+// call, so cross-call state (gate cursor) is reconstructed from the transcript
+// — exercised here by driving two separate server processes against one dir.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync, readdirSync, unlinkSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SERVER = join(here, "server.js");
 
-// Unique per-test SESSION id (matches the [A-Za-z0-9._-]+ sentinel regex) so
-// concurrent runs never collide on /tmp/<session>.* and cleanup is scoped.
-let seq = 0;
-function uniqueSession() {
-  return `rigtest-${process.pid}-${Date.now()}-${seq++}`;
+// ── hermetic sandbox helpers ───────────────────────────────────────────────
+function sandbox() {
+  return mkdtempSync(join(tmpdir(), "rig-"));
 }
-function sentinelPath(session, suffix) {
-  return join("/tmp", `${session}.${suffix}`);
+function destroy(dir) {
+  rmSync(dir, { recursive: true, force: true });
 }
-// Remove every /tmp/<session>.* file this test produced.
-function cleanup(session) {
-  for (const f of readdirSync("/tmp")) {
-    if (f.startsWith(`${session}.`)) {
-      try { unlinkSync(join("/tmp", f)); } catch { /* already gone */ }
-    }
-  }
+function sp(dir, session, suffix) {
+  return join(dir, `${session}.${suffix}`);
+}
+function pointerPath(dir) {
+  return join(dir, "recording-rig.active-session");
+}
+function orphanPath(dir) {
+  return join(dir, "recording-rig.orphan-calls.jsonl");
+}
+function setActiveSession(dir, session) {
+  writeFileSync(pointerPath(dir), session);
+}
+function writeRigConfig(dir, session, config) {
+  writeFileSync(sp(dir, session, "rig-config.json"), JSON.stringify(config));
 }
 
 // Spawn the server, write each request as one line, close stdin, collect the
 // JSON responses keyed by id. Notifications (no id) produce no response.
-// `env` is merged over the inherited environment (e.g. { RIG_SESSION }).
+// `env` is merged over the inherited environment (e.g. { RIG_TMP }).
 function drive(requests, env) {
   return new Promise((resolve, reject) => {
     const child = spawn("node", [SERVER], {
@@ -71,6 +81,8 @@ function callResult(msg) {
   // tools/call result wraps the rig shape as JSON text content.
   return JSON.parse(msg.result.content[0].text);
 }
+
+// ── 2.1 skeleton: protocol + tool surface (session-independent) ─────────────
 
 test("initialize echoes the client's protocolVersion", async () => {
   const { byId } = await drive([
@@ -108,33 +120,6 @@ test("tools/list returns exactly the four rig_* tools", async () => {
   }
 });
 
-test("rig_turn_end / rig_checkpoint / rig_emit return {ok:true}", async () => {
-  const session = uniqueSession();
-  try {
-    const { byId } = await drive([
-      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
-      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rig_checkpoint", arguments: { name: "built" } } },
-      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "rig_emit", arguments: { name: "answer", payload: { v: 42 } } } },
-    ], { RIG_SESSION: session });
-    assert.deepEqual(callResult(byId[1]), { ok: true });
-    assert.deepEqual(callResult(byId[2]), { ok: true });
-    assert.deepEqual(callResult(byId[3]), { ok: true });
-  } finally { cleanup(session); }
-});
-
-test("rig_ask returns an answer_index/answer_value placeholder over options", async () => {
-  const session = uniqueSession();
-  try {
-    const { byId } = await drive([
-      { jsonrpc: "2.0", id: 1, method: "tools/call",
-        params: { name: "rig_ask", arguments: { options: ["alpha", "beta"], prompt: "pick" } } },
-    ], { RIG_SESSION: session });
-    const r = callResult(byId[1]);
-    assert.equal(typeof r.answer_index, "number");
-    assert.equal(r.answer_value, ["alpha", "beta"][r.answer_index]);
-  } finally { cleanup(session); }
-});
-
 test("unknown tool yields a -32602 error", async () => {
   const { byId } = await drive([
     { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_nope", arguments: {} } },
@@ -153,84 +138,104 @@ test("manifest tools[] names match tools/list", async () => {
   assert.deepEqual(manifestNames, RIG_TOOLS);
 });
 
-// ── rr-2pp.2.2: sentinel write (atomic .partial+rename) + transcript JSONL ──
+// ── 2.2 sentinel write (atomic .partial+rename) + transcript JSONL ──────────
 //
 // Sentinel contract is byte-identical to the CLI rig (render-hooks.sh:31-44 +
 // hooks.json.tmpl): markers are 0-byte (touch-equivalent), content sentinels
 // carry NO trailing newline. Suffix map (RDR §TechDesign L248): turn_end →
 // turn-end, checkpoint(name) → checkpoint-<name>, emit(name) → <name>.
 
-test("rig_turn_end writes a 0-byte turn-end marker (byte-identical to touch)", async () => {
-  const session = uniqueSession();
+test("rig_turn_end / rig_checkpoint / rig_emit return {ok:true}", async () => {
+  const dir = sandbox(); const session = "sess";
   try {
+    setActiveSession(dir, session);
     const { byId } = await drive([
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
-    ], { RIG_SESSION: session });
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rig_checkpoint", arguments: { name: "built" } } },
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "rig_emit", arguments: { name: "answer", payload: { v: 42 } } } },
+    ], { RIG_TMP: dir });
     assert.deepEqual(callResult(byId[1]), { ok: true });
-    const p = sentinelPath(session, "turn-end");
+    assert.deepEqual(callResult(byId[2]), { ok: true });
+    assert.deepEqual(callResult(byId[3]), { ok: true });
+  } finally { destroy(dir); }
+});
+
+test("rig_turn_end writes a 0-byte turn-end marker (byte-identical to touch)", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { ok: true });
+    const p = sp(dir, session, "turn-end");
     assert.ok(existsSync(p), "turn-end sentinel exists");
     assert.equal(readFileSync(p, "utf8"), "", "marker carries no content / no trailing newline");
-  } finally { cleanup(session); }
+  } finally { destroy(dir); }
 });
 
-test("rig_checkpoint writes /tmp/<session>.checkpoint-<name>", async () => {
-  const session = uniqueSession();
+test("rig_checkpoint writes <session>.checkpoint-<name>", async () => {
+  const dir = sandbox(); const session = "sess";
   try {
+    setActiveSession(dir, session);
     const { byId } = await drive([
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_checkpoint", arguments: { name: "tests-passed" } } },
-    ], { RIG_SESSION: session });
+    ], { RIG_TMP: dir });
     assert.deepEqual(callResult(byId[1]), { ok: true });
-    assert.ok(existsSync(sentinelPath(session, "checkpoint-tests-passed")), "checkpoint-<name> sentinel exists");
-  } finally { cleanup(session); }
+    assert.ok(existsSync(sp(dir, session, "checkpoint-tests-passed")), "checkpoint-<name> sentinel exists");
+  } finally { destroy(dir); }
 });
 
-test("rig_emit writes /tmp/<session>.<name> with JSON payload and no trailing newline", async () => {
-  const session = uniqueSession();
+test("rig_emit writes <session>.<name> with JSON payload and no trailing newline", async () => {
+  const dir = sandbox(); const session = "sess";
   try {
+    setActiveSession(dir, session);
     const { byId } = await drive([
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_emit", arguments: { name: "answer", payload: { v: 42 } } } },
-    ], { RIG_SESSION: session });
+    ], { RIG_TMP: dir });
     assert.deepEqual(callResult(byId[1]), { ok: true });
-    const body = readFileSync(sentinelPath(session, "answer"), "utf8");
+    const body = readFileSync(sp(dir, session, "answer"), "utf8");
     assert.equal(body, JSON.stringify({ v: 42 }), "content is the JSON-encoded payload");
     assert.ok(!body.endsWith("\n"), "sentinel carries no trailing newline");
-  } finally { cleanup(session); }
+  } finally { destroy(dir); }
 });
 
 test("rig_emit without a payload writes an empty sentinel", async () => {
-  const session = uniqueSession();
+  const dir = sandbox(); const session = "sess";
   try {
+    setActiveSession(dir, session);
     await drive([
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_emit", arguments: { name: "ping" } } },
-    ], { RIG_SESSION: session });
-    assert.equal(readFileSync(sentinelPath(session, "ping"), "utf8"), "");
-  } finally { cleanup(session); }
+    ], { RIG_TMP: dir });
+    assert.equal(readFileSync(sp(dir, session, "ping"), "utf8"), "");
+  } finally { destroy(dir); }
 });
 
 test("rig_emit rejects an invalid identifier and writes no sentinel", async () => {
-  const session = uniqueSession();
+  const dir = sandbox(); const session = "sess";
   try {
+    setActiveSession(dir, session);
     const { byId } = await drive([
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_emit", arguments: { name: "../escape" } } },
-    ], { RIG_SESSION: session });
+    ], { RIG_TMP: dir });
     const r = callResult(byId[1]);
     assert.equal(r.ok, false);
     assert.match(r.reason, /invalid/);
     // The transcript is still written (every call is logged); nothing else is.
-    const leaked = readdirSync("/tmp")
-      .filter((f) => f.startsWith(`${session}.`) && f !== `${session}.bridge-transcript.jsonl`);
-    assert.deepEqual(leaked, [], "a rejected identifier produces no sentinel file");
-  } finally { cleanup(session); }
+    const sessionFiles = readdirSync(dir).filter((f) => f.startsWith(`${session}.`));
+    assert.deepEqual(sessionFiles, [`${session}.bridge-transcript.jsonl`], "a rejected identifier produces no sentinel file");
+  } finally { destroy(dir); }
 });
 
 test("every call appends a {ts,tool,args,result,session} line to the transcript", async () => {
-  const session = uniqueSession();
+  const dir = sandbox(); const session = "sess";
   try {
+    setActiveSession(dir, session);
     await drive([
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
       { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a", "b"] } } },
-    ], { RIG_SESSION: session });
-    const raw = readFileSync(sentinelPath(session, "bridge-transcript.jsonl"), "utf8");
+    ], { RIG_TMP: dir });
+    const raw = readFileSync(sp(dir, session, "bridge-transcript.jsonl"), "utf8");
     assert.ok(raw.endsWith("\n"), "transcript NDJSON lines end in \\n");
     const lines = raw.split("\n").filter(Boolean);
     assert.equal(lines.length, 2, "one line per call, including rig_ask");
@@ -243,16 +248,174 @@ test("every call appends a {ts,tool,args,result,session} line to the transcript"
     }
     assert.equal(JSON.parse(lines[0]).tool, "rig_turn_end");
     assert.equal(JSON.parse(lines[1]).tool, "rig_ask");
-  } finally { cleanup(session); }
+  } finally { destroy(dir); }
 });
 
-test("with no active session a tool call fails loud and writes nothing", async () => {
-  // RIG_SESSION explicitly empty: 2.2's placeholder resolver yields no session.
-  // (rr-2pp.2.3 replaces this with the active-session pointer + orphan log.)
-  const { byId } = await drive([
-    { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
-  ], { RIG_SESSION: "" });
-  const r = callResult(byId[1]);
-  assert.equal(r.ok, false);
-  assert.match(r.reason, /no active session/);
+// ── 2.3 session resolution: active-session pointer + orphan log ─────────────
+
+test("an active-session pointer with a trailing newline is trimmed and accepted", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    writeFileSync(pointerPath(dir), `${session}\n`);
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { ok: true });
+    assert.ok(existsSync(sp(dir, session, "turn-end")), "sentinel written under the trimmed session id");
+  } finally { destroy(dir); }
+});
+
+test("with no active-session pointer every tool fails loud + logs one orphan line each", async () => {
+  const dir = sandbox(); // deliberately no pointer
+  try {
+    const reqs = [
+      { name: "rig_turn_end", arguments: {} },
+      { name: "rig_checkpoint", arguments: { name: "x" } },
+      { name: "rig_emit", arguments: { name: "x" } },
+      { name: "rig_ask", arguments: { options: ["a"] } },
+    ].map((params, i) => ({ jsonrpc: "2.0", id: i + 1, method: "tools/call", params }));
+    const { byId } = await drive(reqs, { RIG_TMP: dir });
+    for (let i = 1; i <= 4; i++) {
+      assert.deepEqual(callResult(byId[i]), { ok: false, reason: "no active session" });
+    }
+    const lines = readFileSync(orphanPath(dir), "utf8").split("\n").filter(Boolean);
+    assert.equal(lines.length, 4, "exactly one orphan record per call");
+    for (const ln of lines) {
+      const o = JSON.parse(ln);
+      assert.equal(o.reason, "no active session");
+      assert.equal(typeof o.tool, "string");
+      assert.ok("args" in o && o.ts, "orphan record carries args + ts");
+    }
+    // No session-scoped files written — only the global orphan log exists.
+    assert.deepEqual(readdirSync(dir), ["recording-rig.orphan-calls.jsonl"]);
+  } finally { destroy(dir); }
+});
+
+test("a malformed active-session pointer is rejected (fails loud + orphan log)", async () => {
+  const dir = sandbox();
+  try {
+    setActiveSession(dir, "bad session!"); // space + ! fail the identifier regex
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { ok: false, reason: "no active session" });
+    assert.equal(readFileSync(orphanPath(dir), "utf8").split("\n").filter(Boolean).length, 1);
+  } finally { destroy(dir); }
+});
+
+// ── 2.3 rig_ask gate answers (flat gate cursor, mirrors bin/driver.sh) ──────
+
+test("rig_ask returns the configured gate answer (success shape has no ok field)", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    writeRigConfig(dir, session, { session, gates: [{ for_command: 0, answer_index: 1 }] });
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["alpha", "beta"], prompt: "pick" } } },
+    ], { RIG_TMP: dir });
+    const r = callResult(byId[1]);
+    assert.deepEqual(r, { answer_index: 1, answer_value: "beta" });
+    assert.ok(!("ok" in r), "success shape carries no ok field");
+  } finally { destroy(dir); }
+});
+
+test("two gates for the same command are consumed in array order across calls", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    writeRigConfig(dir, session, { session, gates: [
+      { for_command: 0, answer_index: 1 },
+      { for_command: 0, answer_index: 0 },
+    ] });
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a", "b"] } } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a", "b"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { answer_index: 1, answer_value: "b" });
+    assert.deepEqual(callResult(byId[2]), { answer_index: 0, answer_value: "a" });
+  } finally { destroy(dir); }
+});
+
+test("a rig_ask past the last gate fails loud with 'no gate configured'", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    writeRigConfig(dir, session, { session, gates: [{ for_command: 0, answer_index: 0 }] });
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a", "b"] } } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a", "b"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { answer_index: 0, answer_value: "a" });
+    assert.deepEqual(callResult(byId[2]), { ok: false, reason: "no gate configured" });
+  } finally { destroy(dir); }
+});
+
+test("rig_ask with no rig-config fails loud with 'no gate configured'", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { ok: false, reason: "no gate configured" });
+  } finally { destroy(dir); }
+});
+
+test("rig_ask with a corrupt rig-config fails loud with 'no gate configured'", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    writeFileSync(sp(dir, session, "rig-config.json"), "not json{");
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { ok: false, reason: "no gate configured" });
+  } finally { destroy(dir); }
+});
+
+test("rig-config is re-read each call: mid-session rewrite honored, cursor persists across PIDs", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    // Config A: gate[1] answers 'b'.
+    writeRigConfig(dir, session, { session, gates: [
+      { for_command: 0, answer_index: 0 },
+      { for_command: 0, answer_index: 1 },
+    ] });
+    const first = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a", "b"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(first.byId[1]), { answer_index: 0, answer_value: "a" }, "gate[0]");
+    // Rewrite gate[1] → 'a'. A fresh PID must read the new file (not cache),
+    // and reconstruct gateIdx=1 from the shared transcript.
+    writeRigConfig(dir, session, { session, gates: [
+      { for_command: 0, answer_index: 0 },
+      { for_command: 0, answer_index: 0 },
+    ] });
+    const second = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a", "b"] } } },
+    ], { RIG_TMP: dir });
+    // Cached config A would answer 'b'; the rewritten gate[1] answers 'a'.
+    assert.deepEqual(callResult(second.byId[1]), { answer_index: 0, answer_value: "a" }, "gate[1], re-read");
+  } finally { destroy(dir); }
+});
+
+test("a gate bound to a later command is skipped until that command's turn (for_command boundary)", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session);
+    writeRigConfig(dir, session, { session, gates: [{ for_command: 1, answer_index: 1 }] });
+    // During command 0 (no prior rig_turn_end), the gate targets command 1 → no match.
+    const a = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["x", "y"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(a.byId[1]), { ok: false, reason: "no gate configured" });
+    // End command 0, then ask during command 1: the failed ask did NOT burn the
+    // slot (gateIdx still 0), and for_command==1 now matches k==1.
+    const b = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_turn_end", arguments: {} } },
+      { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["x", "y"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(b.byId[2]), { answer_index: 1, answer_value: "y" });
+  } finally { destroy(dir); }
 });

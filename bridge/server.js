@@ -15,7 +15,7 @@
 // (observed in RDR-001 P0.1, where the probe shipped as probe_distinctive_
 // marker_42). The dotted forms remain documentation-only.
 
-const { writeFileSync, renameSync, appendFileSync } = require("node:fs");
+const { readFileSync, writeFileSync, renameSync, appendFileSync } = require("node:fs");
 
 const SERVER_NAME = "recording-rig-bridge";
 const SERVER_VERSION = "0.0.1";
@@ -30,8 +30,17 @@ function checkIdentifier(value) {
   return typeof value === "string" && value.length > 0 && SENTINEL_ID_RE.test(value);
 }
 
+// Sentinel namespace root. Production is /tmp — byte-identical to the CLI rig.
+// RIG_TMP overrides it for hermetic tests ONLY (isolates the global pointer /
+// orphan-log paths); record.sh never sets it, so production stays /tmp.
+function tmpRoot() {
+  return process.env.RIG_TMP || "/tmp";
+}
+function rootPath(name) {
+  return tmpRoot() + "/" + name;
+}
 function sentinelPath(session, suffix) {
-  return "/tmp/" + session + "." + suffix;
+  return rootPath(session + "." + suffix);
 }
 
 // Atomic sentinel write — port of render-hooks.sh:31-44: write a .partial
@@ -63,13 +72,83 @@ function appendTranscript(session, tool, args, result) {
   appendFileSync(sentinelPath(session, "bridge-transcript.jsonl"), line);
 }
 
-// Resolve the active SESSION. rr-2pp.2.2 placeholder: reads RIG_SESSION so the
-// pure write/transcript paths are exercisable in isolation. rr-2pp.2.3 replaces
-// this body with the /tmp/recording-rig.active-session pointer read (re-read on
-// every call, never cached) + orphan-call logging.
+const ACTIVE_SESSION_POINTER = "recording-rig.active-session";
+const ORPHAN_CALLS_LOG = "recording-rig.orphan-calls.jsonl";
+
+// Resolve the active SESSION fresh on EVERY call — never cached. The bridge is
+// a fresh PID per tool call (001-research-2) and Claude exposes no MCP session
+// id (001-research-15), so the global recording-rig.active-session pointer
+// (written by record.sh, re-read here) is the only handle. The pointer is
+// untrusted from the bridge's POV: validate its contents against the same
+// identifier regex (mirrors _require_session, lib/sentinels.sh:24-34). A
+// trailing newline is tolerated (trim) — the file is "a single-line id".
 function resolveSession() {
-  const s = process.env.RIG_SESSION;
-  return typeof s === "string" && s.length > 0 ? s : null;
+  let raw;
+  try {
+    raw = readFileSync(rootPath(ACTIVE_SESSION_POINTER), "utf8");
+  } catch {
+    return null; // pointer absent
+  }
+  const session = raw.trim();
+  return checkIdentifier(session) ? session : null;
+}
+
+// Fail-loud record for a call that arrived with no resolvable session. One line
+// per call to the GLOBAL orphan log (not session-scoped — there is no session),
+// letting record.sh / diagnose surface a misconfigured launch.
+function appendOrphanCall(tool, args) {
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    tool,
+    args,
+    reason: "no active session",
+  }) + "\n";
+  appendFileSync(rootPath(ORPHAN_CALLS_LOG), line);
+}
+
+// Per-session gate-answer side-channel, re-read fresh each call so a mid-session
+// rewrite is honored (never cached). Missing or corrupt JSON → null; the caller
+// fails loud with "no gate configured". record.sh writes this from the spec's
+// gates[] before launch (rr-2pp.3.3).
+function readRigConfig(session) {
+  let raw;
+  try {
+    raw = readFileSync(sentinelPath(session, "rig-config.json"), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null; // corrupt
+  }
+}
+
+// Reconstruct the gate cursor from the persistent transcript — nothing survives
+// in memory between (fresh-PID) calls. Mirrors bin/driver.sh's flat monotonic
+// gate_idx (L56/L122) + command-boundary model (L102/L116-122):
+//   k       = current command index   = # prior rig_turn_end calls
+//   gateIdx = # gates already consumed = # prior SUCCESSFUL rig_ask calls
+// Only successful asks advance gateIdx, so a "no gate configured" ask (e.g. the
+// pending gate targets a later command) does not burn the slot — it is retried
+// when that command's turn arrives, exactly like driver.sh's `break`.
+function gateCursor(session) {
+  let raw;
+  try {
+    raw = readFileSync(sentinelPath(session, "bridge-transcript.jsonl"), "utf8");
+  } catch {
+    return { k: 0, gateIdx: 0 };
+  }
+  let k = 0;
+  let gateIdx = 0;
+  for (const ln of raw.split("\n")) {
+    if (!ln) continue;
+    let o;
+    try { o = JSON.parse(ln); } catch { continue; }
+    if (o.tool === "rig_turn_end") k++;
+    else if (o.tool === "rig_ask" && o.result && typeof o.result.answer_index === "number") gateIdx++;
+  }
+  return { k, gateIdx };
 }
 
 const TOOLS = [
@@ -139,9 +218,9 @@ function runTool(name, args) {
 
   const session = resolveSession();
   if (!session) {
-    // rr-2pp.2.2 minimal guard. rr-2pp.2.3 adds the pointer read +
-    // /tmp/recording-rig.orphan-calls.jsonl logging. No session → no
-    // per-session transcript to append to, so we fail loud and return.
+    // No session → no per-session transcript to append to. Log the orphan call
+    // to the global log and fail loud so the model retries on the next turn.
+    appendOrphanCall(name, args || {});
     return { ok: false, reason: "no active session" };
   }
 
@@ -173,10 +252,28 @@ function runTool(name, args) {
       break;
     }
     case "rig_ask": {
-      // rr-2pp.2.3 wires real gate answers from /tmp/${SESSION}.rig-config.json
-      // and the gate-pending sentinel. 2.2 keeps the skeleton placeholder.
+      // Answer from the per-session rig-config gates[], consumed in flat array
+      // order (one gate per successful ask). Success shape has NO ok field
+      // (RDR §TechDesign L185); every fail mode is {ok:false,reason:...}.
       const options = Array.isArray(args && args.options) ? args.options : [];
-      result = { answer_index: 0, answer_value: options[0] };
+      const config = readRigConfig(session);
+      const gates = config && Array.isArray(config.gates) ? config.gates : null;
+      const { k, gateIdx } = gateCursor(session);
+      if (!gates || gateIdx >= gates.length) {
+        result = { ok: false, reason: "no gate configured" };
+        break;
+      }
+      const gate = gates[gateIdx];
+      // for_command (integer command index in rig-config; a STRING in driver.sh
+      // — record.sh translates, rr-2pp.3.3) is a command-boundary break: a gate
+      // bound to a different command is not consumed by an ask during command k.
+      const target = gate && gate.for_command;
+      if (target !== null && target !== undefined && target !== k) {
+        result = { ok: false, reason: "no gate configured" };
+        break;
+      }
+      const idx = gate.answer_index;
+      result = { answer_index: idx, answer_value: options[idx] };
       break;
     }
   }
