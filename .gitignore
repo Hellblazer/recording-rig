@@ -7,3 +7,11 @@
 node_modules/
 .idea/
 .serena/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Packed MCPB build artifacts (source under probes/<name>/; rebuilt via `npx -y @anthropic-ai/mcpb pack`)
+*.mcpb

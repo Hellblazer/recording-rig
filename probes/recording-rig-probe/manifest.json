@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "recording-rig-probe",
+  "display_name": "Recording Rig Probe",
+  "version": "0.0.1",
+  "description": "Single-tool reachability probe for RDR-001 Phase 0 (A1, A2). Returns a distinctive marker string when called.",
+  "long_description": "Minimal MCP server with one tool, probe_distinctive_marker_42. Used by recording-rig RDR-001 Phase 0 probes (P0.1 Code, P0.2 CoWork) to verify whether .mcpb extension tools are reachable from each Claude Desktop surface. Returns a fixed sentinel string so an interactive 'please call the tool and report what it returns' check can be scored unambiguously. No side effects, no network, no filesystem access.",
+  "author": {
+    "name": "Hal Hildebrand",
+    "url": "https://github.com/Hellblazer"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hellblazer/recording-rig"
+  },
+  "homepage": "https://github.com/Hellblazer/recording-rig",
+  "license": "MIT",
+  "keywords": ["recording-rig", "probe", "rdr-001", "phase-0"],
+  "server": {
+    "type": "node",
+    "entry_point": "server.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server.js"]
+    }
+  },
+  "tools": [
+    {
+      "name": "probe_distinctive_marker_42",
+      "description": "Returns the fixed string RECORDING_RIG_PROBE_DISTINCTIVE_MARKER_42_OK. Used to verify that .mcpb tools are reachable from the current Claude Desktop surface."
+    }
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "node": ">=16.0.0"
+    }
+  }
+}
