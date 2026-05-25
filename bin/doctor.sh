@@ -103,6 +103,22 @@ if [[ "$(uname)" == "Darwin" ]]; then
     warn "swiftc MISSING — required to build bin/desktop-driver"
     hint "install: xcode-select --install"
   fi
+  # The desktop record.sh path requires these built/present artifacts; surface
+  # them here so a desktop user who passes doctor doesn't hit a record.sh
+  # preflight failure later (rr-2pp.3.3 integration finding).
+  HERE_DOCTOR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -x "$HERE_DOCTOR/bin/desktop-driver" ]]; then
+    ok "bin/desktop-driver built"
+  else
+    warn "bin/desktop-driver not built — desktop recordings will fail preflight"
+    hint "build: bin/build-desktop-driver.sh"
+  fi
+  [[ -f "$HERE_DOCTOR/bin/desktop-ax-selectors.json" ]] \
+    && ok "bin/desktop-ax-selectors.json present" \
+    || warn "bin/desktop-ax-selectors.json missing — required by the desktop driver"
+  [[ -x "$HERE_DOCTOR/bin/render-webm.sh" ]] \
+    && ok "bin/render-webm.sh present" \
+    || warn "bin/render-webm.sh missing — required for the desktop render"
   hint "desktop backend also needs Accessibility + Screen Recording permission (System Settings > Privacy & Security)"
 fi
 
