@@ -12,8 +12,10 @@ PKG="$HERE/desktop-driver"
 
 command -v swift >/dev/null 2>&1 || { echo "build-desktop-driver: swift not found on PATH" >&2; exit 1; }
 
-echo "[build-desktop-driver] swift build -c release ($PKG)"
-swift build --package-path "$PKG" -c release
+echo "[build-desktop-driver] swift build -c release --product desktop-driver ($PKG)"
+# --product scopes the build to the shipping target so the sibling ax-dump
+# discovery target (rr-2pp.5.1) is not compiled as a side effect here.
+swift build --package-path "$PKG" -c release --product desktop-driver
 
 # --show-bin-path only resolves + prints the bin dir; it does NOT recompile (the
 # build above already did), so this second invocation is cheap.

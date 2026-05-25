@@ -3,6 +3,14 @@
     "chat": {
       "navButton": { "role": "AXButton", "description": "Chat" },
       "composer": { "role": "AXTextArea", "description": "Write your prompt to Claude" }
+    },
+    "code": {
+      "navButton": { "role": "AXButton", "description": "Code" },
+      "composer": { "role": "AXTextArea", "description": "Prompt" }
+    },
+    "cowork": {
+      "navButton": { "role": "AXButton", "description": "Cowork" },
+      "composer": { "role": "AXTextArea", "description": "Write your prompt to Claude" }
     }
   }
 }

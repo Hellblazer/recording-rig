@@ -24,6 +24,10 @@ let package = Package(
             name: "desktop-driver",
             dependencies: ["DesktopDriverCore"]
         ),
+        // Read-only AX-tree dumper for surface-selector discovery (rr-2pp.5.1).
+        // Self-contained (ApplicationServices only) so it cannot affect the
+        // shipping driver target; staged to bin/ax-dump by build-ax-dump.sh.
+        .executableTarget(name: "ax-dump"),
         .testTarget(
             name: "DesktopDriverCoreTests",
             dependencies: ["DesktopDriverCore"]

@@ -46,4 +46,26 @@ final class SelectorsTests: XCTestCase {
         XCTAssertEqual(chat.composer.axDescription, "Write your prompt to Claude")
         XCTAssertEqual(chat.navButton.role, "AXButton")
     }
+
+    func testRepoSelectorsFileHasCodeAndCoworkSurfaces() throws {
+        // Phase 4 Step 1 (rr-2pp.5.1): the committed file must carry the live-
+        // observed Code + CoWork locators (ax-dump against Claude-Rig, 2026-05-25;
+        // T2 recording-rig/scratch). Code's composer description ("Prompt")
+        // DIFFERS from Chat/CoWork ("Write your prompt to Claude") — that
+        // divergence is the whole reason this surface needed live discovery.
+        let here = URL(fileURLWithPath: #filePath)
+        let repoRoot = here
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let selPath = repoRoot.appendingPathComponent("bin/desktop-ax-selectors.json").path
+        let s = try Selectors.load(path: selPath)
+
+        let code = try s.surface("code")
+        XCTAssertEqual(code.navButton, Selector(role: "AXButton", axDescription: "Code"))
+        XCTAssertEqual(code.composer, Selector(role: "AXTextArea", axDescription: "Prompt"))
+
+        let cowork = try s.surface("cowork")
+        XCTAssertEqual(cowork.navButton, Selector(role: "AXButton", axDescription: "Cowork"))
+        XCTAssertEqual(cowork.composer, Selector(role: "AXTextArea", axDescription: "Write your prompt to Claude"))
+    }
 }
