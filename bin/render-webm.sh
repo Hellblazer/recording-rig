@@ -18,6 +18,10 @@ FPS="${RENDER_FPS:-12}"
 
 [[ -f "$IN" ]] || { echo "render-webm: input .mov not found: $IN" >&2; exit 1; }
 command -v ffmpeg >/dev/null 2>&1 || { echo "render-webm: ffmpeg not found (run bin/doctor.sh)" >&2; exit 1; }
+[[ "$FPS" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "render-webm: RENDER_FPS must be numeric, got: $FPS" >&2; exit 1; }
+if [[ "${SKIP_MP4:-0}" == "1" && "${SKIP_GIF:-0}" == "1" ]]; then
+  echo "render-webm: SKIP_MP4=1 and SKIP_GIF=1 — nothing to render" >&2
+fi
 
 WORK=""
 # Must end with a success status: as the EXIT trap's last command under `set -e`,
@@ -41,13 +45,16 @@ fi
 # zero-extra-dependency ffmpeg two-pass palette. Either way, fps is clamped to
 # keep the GIF small (parity with the CLI rig's agg defaults).
 if [[ "${SKIP_GIF:-0}" != "1" ]]; then
+  WORK="$(mktemp -d)"
   if command -v gifski >/dev/null 2>&1; then
-    WORK="$(mktemp -d)"
     ffmpeg -y -loglevel error -i "$IN" -vf "fps=${FPS}" "$WORK/frame%05d.png"
-    gifski -o "$GIF" --fps "$FPS" "$WORK"/frame*.png
+    shopt -s nullglob
+    frames=("$WORK"/frame*.png)
+    shopt -u nullglob
+    [[ ${#frames[@]} -gt 0 ]] || { echo "render-webm: no frames extracted from $IN" >&2; exit 1; }
+    gifski -o "$GIF" --fps "$FPS" "${frames[@]}"
     echo "[render-webm] gif (gifski) -> $GIF"
   else
-    WORK="$(mktemp -d)"
     ffmpeg -y -loglevel error -i "$IN" -vf "fps=${FPS},palettegen" "$WORK/palette.png"
     ffmpeg -y -loglevel error -i "$IN" -i "$WORK/palette.png" \
       -lavfi "fps=${FPS},paletteuse" "$GIF"
