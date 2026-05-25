@@ -120,6 +120,24 @@ if [[ "$(uname)" == "Darwin" ]]; then
     && ok "bin/render-webm.sh present" \
     || warn "bin/render-webm.sh missing — required for the desktop render"
   hint "desktop backend also needs Accessibility + Screen Recording permission (System Settings > Privacy & Security)"
+
+  # Soft-miss trend (RDR-001 Phase 3 Step 2): warn when the Desktop model is
+  # skipping rig.turn_end too often (instruction drift). Advisory — never fails
+  # doctor. Needs jq; silent on <3 samples (too few to assess).
+  # shellcheck disable=SC1091
+  source "$HERE_DOCTOR/lib/quality.sh"
+  if command -v jq >/dev/null 2>&1; then
+    qlog="$(quality_log_path)"
+    read -r smr_pct smr_n < <(quality_soft_miss_rate "$qlog" 20)
+    if (( smr_n >= 3 )); then
+      if (( smr_pct > 20 )); then
+        warn "desktop soft-miss rate ${smr_pct}% over last ${smr_n} runs (>20%) — model is skipping rig.turn_end"
+        hint "strengthen the system_prompt_prologue (see examples/desktop-chat.json) and re-record; RDR-001 Risk 'instruction drift'. Log: $qlog"
+      else
+        ok "desktop soft-miss rate ${smr_pct}% over last ${smr_n} runs"
+      fi
+    fi
+  fi
 fi
 
 echo
