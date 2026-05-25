@@ -161,6 +161,50 @@ test("desktop: must_contain_in_order against transcript text", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("desktop: CLI default forbidden markers do NOT apply (no false FAIL on JSON text)", () => {
+  const dir = sandbox();
+  try {
+    // No must_not_contain override; a CLI-default marker ("step_aborted") sits
+    // in the transcript args. Desktop default is [] so this must still PASS.
+    const r = run(dir, { backend: "desktop" },
+      { dataName: "t.jsonl", dataContent: transcript([
+        { tool: "rig_ask", args: { options: ["step_aborted"] }, result: { ok: false, reason: "no gate configured" } },
+        { tool: "rig_turn_end" },
+      ]) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop: missing ffprobe / .mov is WARN-only, still PASS", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop" },
+      { dataName: "t.jsonl", dataContent: transcript([{ tool: "rig_turn_end" }]),
+        movPath: "/nonexistent/recording.mov" });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stderr, /WARN/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop: empty transcript => FAIL (no rig_turn_end)", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", desktop: { checkpoints: [{ name: "x", required: true }] } },
+      { dataName: "t.jsonl", dataContent: "" });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /rig_turn_end/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop: no checkpoints declared + ends rig_turn_end => PASS", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop" },
+      { dataName: "t.jsonl", dataContent: transcript([{ tool: "rig_turn_end" }]) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("SKIP_VALIDATE=1 short-circuits the desktop path too", () => {
   const dir = sandbox();
   try {

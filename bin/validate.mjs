@@ -38,10 +38,14 @@ const spec = JSON.parse(readFileSync(specPath, "utf8"));
 const backend = spec.backend ?? "cli";
 const must = spec.validate?.must_contain ?? [];
 const mustInOrder = spec.validate?.must_contain_in_order ?? [];
-const mustNot = spec.validate?.must_not_contain ?? [
+// The CLI defaults are terminal-output failure markers; they do not map to the
+// desktop transcript's structured JSON (which never contains rendered agent
+// text), so matching them there risks a false FAIL on a prompt/arg substring.
+// Desktop opts into forbidden markers explicitly (default none).
+const mustNot = spec.validate?.must_not_contain ?? (backend === "desktop" ? [] : [
   "step_aborted",
   "failure_reason",
-];
+]);
 
 // Strip ANSI/CSI/OSC escapes, then APPLY backspaces (they delete the
 // preceding character — without this, "ERROR<BS><BS><BS><BS><BS>CLEAR"
