@@ -102,14 +102,25 @@ if (backend === "desktop") {
   const seen = entries
     .filter((e) => e.tool === "rig_checkpoint")
     .map((e) => e.args?.name);
+  const seenSet = new Set(seen);
+  // Report ALL missing checkpoints (not just the first) — clearer for debugging
+  // a multi-checkpoint spec.
+  for (const name of required) {
+    if (!seenSet.has(name)) {
+      extraFailures.push(`required checkpoint '${name}' missing`);
+    }
+  }
+  // Among the required checkpoints that ARE present, verify spec-declared order
+  // via a monotonic cursor; a present-but-too-early checkpoint is out of order.
   let cursor = 0;
   for (const name of required) {
+    if (!seenSet.has(name)) continue;
     const idx = seen.indexOf(name, cursor);
     if (idx === -1) {
-      extraFailures.push(`required checkpoint '${name}' missing or out of order`);
-      break;
+      extraFailures.push(`required checkpoint '${name}' out of order`);
+    } else {
+      cursor = idx + 1;
     }
-    cursor = idx + 1;
   }
 
   // The last call must be rig_turn_end (the turn closed cleanly).

@@ -121,6 +121,22 @@ test("desktop: required checkpoints out of order => FAIL", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("desktop: ALL missing required checkpoints are reported (not just the first)", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir,
+      { backend: "desktop", desktop: { checkpoints: [
+        { name: "a", required: true }, { name: "b", required: true }, { name: "c", required: true }] } },
+      { dataName: "t.jsonl", dataContent: transcript([
+        { tool: "rig_checkpoint", args: { name: "b" } },
+        { tool: "rig_turn_end" },
+      ]) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /'a' missing/);
+    assert.match(r.stderr, /'c' missing/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("desktop: last call not rig_turn_end => FAIL", () => {
   const dir = sandbox();
   try {
