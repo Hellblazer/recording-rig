@@ -19,3 +19,4 @@ node_modules/
 # Swift desktop-driver build artifacts (source under desktop-driver/; rebuilt via bin/build-desktop-driver.sh)
 desktop-driver/.build/
 /bin/desktop-driver
+/bin/ax-dump
