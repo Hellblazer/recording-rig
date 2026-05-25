@@ -236,7 +236,12 @@ function runTool(name, args) {
         result = { ok: false, reason: "invalid checkpoint name: " + String(cpName) };
         break;
       }
-      writeSentinel(session, "checkpoint-" + cpName, "");
+      // Fixed `checkpoint` suffix (RDR §TechDesign L248 family); the validated
+      // name is the file CONTENT (latest checkpoint), mirroring turn-end's
+      // overwrite-latest marker semantics. The validator reads full checkpoint
+      // history from the transcript; this sentinel is the companion's
+      // latest-checkpoint signal. No trailing newline (the regex forbids one).
+      writeSentinel(session, "checkpoint", cpName);
       result = { ok: true };
       break;
     }
@@ -252,9 +257,13 @@ function runTool(name, args) {
       break;
     }
     case "rig_ask": {
-      // Answer from the per-session rig-config gates[], consumed in flat array
+      // A gate is pending whenever the model asks — write the marker first
+      // (byte-identical to the CLI PreToolUse:AskUserQuestion `touch`,
+      // hooks.json.tmpl), independent of whether a gate is configured. Then
+      // answer from the per-session rig-config gates[], consumed in flat array
       // order (one gate per successful ask). Success shape has NO ok field
       // (RDR §TechDesign L185); every fail mode is {ok:false,reason:...}.
+      writeSentinel(session, "gate-pending", "");
       const options = Array.isArray(args && args.options) ? args.options : [];
       const config = readRigConfig(session);
       const gates = config && Array.isArray(config.gates) ? config.gates : null;

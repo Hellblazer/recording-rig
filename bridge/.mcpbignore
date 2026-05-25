@@ -1,0 +1,6 @@
+# Keep the packed .mcpb to manifest.json + server.js. The test suite stays in
+# the source tree but must not ship inside the distributed extension bundle.
+*.test.mjs
+
+# Never pack a previously-built bundle into itself.
+*.mcpb

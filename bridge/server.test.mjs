@@ -174,7 +174,7 @@ test("rig_turn_end writes a 0-byte turn-end marker (byte-identical to touch)", a
   } finally { destroy(dir); }
 });
 
-test("rig_checkpoint writes <session>.checkpoint-<name>", async () => {
+test("rig_checkpoint writes <session>.checkpoint with the name as content", async () => {
   const dir = sandbox(); const session = "sess";
   try {
     setActiveSession(dir, session);
@@ -182,7 +182,9 @@ test("rig_checkpoint writes <session>.checkpoint-<name>", async () => {
       { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_checkpoint", arguments: { name: "tests-passed" } } },
     ], { RIG_TMP: dir });
     assert.deepEqual(callResult(byId[1]), { ok: true });
-    assert.ok(existsSync(sp(dir, session, "checkpoint-tests-passed")), "checkpoint-<name> sentinel exists");
+    const p = sp(dir, session, "checkpoint");
+    assert.ok(existsSync(p), "fixed-suffix checkpoint sentinel exists");
+    assert.equal(readFileSync(p, "utf8"), "tests-passed", "name is the content, no trailing newline");
   } finally { destroy(dir); }
 });
 
@@ -304,6 +306,20 @@ test("a malformed active-session pointer is rejected (fails loud + orphan log)",
 });
 
 // ── 2.3 rig_ask gate answers (flat gate cursor, mirrors bin/driver.sh) ──────
+
+test("rig_ask writes a gate-pending marker even with no gate configured", async () => {
+  const dir = sandbox(); const session = "sess";
+  try {
+    setActiveSession(dir, session); // no rig-config: a gate is still "pending" because the model asked
+    const { byId } = await drive([
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "rig_ask", arguments: { options: ["a"] } } },
+    ], { RIG_TMP: dir });
+    assert.deepEqual(callResult(byId[1]), { ok: false, reason: "no gate configured" });
+    const p = sp(dir, session, "gate-pending");
+    assert.ok(existsSync(p), "gate-pending written regardless of gate config");
+    assert.equal(readFileSync(p, "utf8"), "", "marker is empty (byte-identical to CLI touch)");
+  } finally { destroy(dir); }
+});
 
 test("rig_ask returns the configured gate answer (success shape has no ok field)", async () => {
   const dir = sandbox(); const session = "sess";
