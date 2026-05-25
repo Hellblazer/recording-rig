@@ -15,9 +15,62 @@
 // (observed in RDR-001 P0.1, where the probe shipped as probe_distinctive_
 // marker_42). The dotted forms remain documentation-only.
 
+const { writeFileSync, renameSync, appendFileSync } = require("node:fs");
+
 const SERVER_NAME = "recording-rig-bridge";
 const SERVER_VERSION = "0.0.1";
 const FALLBACK_PROTOCOL = "2025-06-18";
+
+// Identifier guard — inline port of lib/sentinels.sh:12 rig_check_identifier
+// (default regex ^[A-Za-z0-9._-]+$). Defense in depth: record.sh:104-107
+// preflights spec-provided names, but the bridge receives tool args at runtime
+// independently, so it re-validates anything that becomes a path suffix.
+const SENTINEL_ID_RE = /^[A-Za-z0-9._-]+$/;
+function checkIdentifier(value) {
+  return typeof value === "string" && value.length > 0 && SENTINEL_ID_RE.test(value);
+}
+
+function sentinelPath(session, suffix) {
+  return "/tmp/" + session + "." + suffix;
+}
+
+// Atomic sentinel write — port of render-hooks.sh:31-44: write a .partial
+// sibling, then rename(2) it onto the final path so readers never observe a
+// 0-byte / half-written file. /tmp is APFS on the same volume (RDR 001-research-5),
+// so the rename is atomic and never EXDEVs — no cross-device fallback needed.
+// Marker sentinels pass content "" (byte-identical to the CLI hooks' `touch`);
+// content sentinels carry NO trailing newline.
+function writeSentinel(session, suffix, content) {
+  const finalPath = sentinelPath(session, suffix);
+  const partial = finalPath + ".partial";
+  writeFileSync(partial, content);
+  renameSync(partial, finalPath);
+  return finalPath;
+}
+
+// Append-only transcript at /tmp/${SESSION}.bridge-transcript.jsonl — one JSON
+// object per call, the validator's primary input (RDR §TechDesign). Unlike the
+// sentinels, each transcript line DOES end in "\n" (NDJSON). Logged for EVERY
+// call (including rig_ask) so coverage is complete and in call order.
+function appendTranscript(session, tool, args, result) {
+  const line = JSON.stringify({
+    ts: new Date().toISOString(),
+    tool,
+    args,
+    result,
+    session,
+  }) + "\n";
+  appendFileSync(sentinelPath(session, "bridge-transcript.jsonl"), line);
+}
+
+// Resolve the active SESSION. rr-2pp.2.2 placeholder: reads RIG_SESSION so the
+// pure write/transcript paths are exercisable in isolation. rr-2pp.2.3 replaces
+// this body with the /tmp/recording-rig.active-session pointer read (re-read on
+// every call, never cached) + orphan-call logging.
+function resolveSession() {
+  const s = process.env.RIG_SESSION;
+  return typeof s === "string" && s.length > 0 ? s : null;
+}
 
 const TOOLS = [
   {
@@ -75,24 +128,62 @@ function toolResult(shape) {
   return { content: [{ type: "text", text: JSON.stringify(shape) }], isError: false };
 }
 
-// SKELETON stub handlers — RDR-pinned shapes; wiring (sentinel write, session
-// resolution, rig-config gate read) is deferred to rr-2pp.2.2 / 2.3.
-function callTool(name, args) {
+const RIG_TOOL_NAMES = ["rig_turn_end", "rig_checkpoint", "rig_emit", "rig_ask"];
+
+// Dispatch a rig_* tool. Returns the inner rig result shape, or null for an
+// unknown tool (caller maps that to a JSON-RPC -32602). Side effects per call:
+// resolve session → write the tool's sentinel (turn_end/checkpoint/emit) →
+// append the transcript line. Idempotent: the .partial+rename overwrites.
+function runTool(name, args) {
+  if (!RIG_TOOL_NAMES.includes(name)) return null; // unknown tool
+
+  const session = resolveSession();
+  if (!session) {
+    // rr-2pp.2.2 minimal guard. rr-2pp.2.3 adds the pointer read +
+    // /tmp/recording-rig.orphan-calls.jsonl logging. No session → no
+    // per-session transcript to append to, so we fail loud and return.
+    return { ok: false, reason: "no active session" };
+  }
+
+  let result;
   switch (name) {
     case "rig_turn_end":
-      return toolResult({ ok: true });
-    case "rig_checkpoint":
-      return toolResult({ ok: true });
-    case "rig_emit":
-      return toolResult({ ok: true });
-    case "rig_ask": {
-      const options = Array.isArray(args && args.options) ? args.options : [];
-      // Placeholder: real gate answers come from /tmp/${SESSION}.rig-config.json (rr-2pp.2.3).
-      return toolResult({ answer_index: 0, answer_value: options[0] });
+      writeSentinel(session, "turn-end", "");
+      result = { ok: true };
+      break;
+    case "rig_checkpoint": {
+      const cpName = args && args.name;
+      if (!checkIdentifier(cpName)) {
+        result = { ok: false, reason: "invalid checkpoint name: " + String(cpName) };
+        break;
+      }
+      writeSentinel(session, "checkpoint-" + cpName, "");
+      result = { ok: true };
+      break;
     }
-    default:
-      return null; // unknown tool
+    case "rig_emit": {
+      const emName = args && args.name;
+      if (!checkIdentifier(emName)) {
+        result = { ok: false, reason: "invalid emit name: " + String(emName) };
+        break;
+      }
+      const payload = args && args.payload;
+      writeSentinel(session, emName, payload === undefined ? "" : JSON.stringify(payload));
+      result = { ok: true };
+      break;
+    }
+    case "rig_ask": {
+      // rr-2pp.2.3 wires real gate answers from /tmp/${SESSION}.rig-config.json
+      // and the gate-pending sentinel. 2.2 keeps the skeleton placeholder.
+      const options = Array.isArray(args && args.options) ? args.options : [];
+      result = { answer_index: 0, answer_value: options[0] };
+      break;
+    }
   }
+
+  // Every resolved call is logged, including invalid-identifier rejections.
+  appendTranscript(session, name, args || {}, result);
+  return result;
 }
 
 function handle(msg) {
@@ -114,12 +205,12 @@ function handle(msg) {
       return;
     case "tools/call": {
       const name = msg.params && msg.params.name;
-      const result = callTool(name, (msg.params && msg.params.arguments) || {});
+      const result = runTool(name, (msg.params && msg.params.arguments) || {});
       if (result === null) {
         errorReply(msg.id, -32602, "unknown tool: " + name);
         return;
       }
-      reply(msg.id, result);
+      reply(msg.id, toolResult(result));
       return;
     }
     case "ping":
