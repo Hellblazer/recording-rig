@@ -22,6 +22,7 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
     private var writer: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
     private var sessionStarted = false
+    private var appendedFrames = 0
 
     init(rigPid: pid_t, outputPath: String) {
         self.rigPid = rigPid
@@ -99,7 +100,9 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
         }
 
         if writer.status == .writing, input.isReadyForMoreMediaData {
-            input.append(sampleBuffer)
+            if input.append(sampleBuffer) {
+                appendedFrames += 1
+            }
         }
     }
 
@@ -112,6 +115,18 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
             let semaphore = DispatchSemaphore(value: 0)
             writer.finishWriting { semaphore.signal() }
             semaphore.wait()
+        }
+        // W6 diagnostic for the rr-2pp.3.6 gate: if zero frames were appended or
+        // the writer failed, the .mov is empty/corrupt — surface a real error
+        // (the highest-risk runtime concern, W5, manifests exactly here) rather
+        // than a silent zero-byte file.
+        if let writer {
+            let status = writer.status
+            if appendedFrames == 0 || status == .failed {
+                let err = writer.error.map { "\($0)" } ?? "none"
+                FileHandle.standardError.write(Data(
+                    "[desktop-driver] capture diagnostic: appendedFrames=\(appendedFrames) writerStatus=\(status.rawValue) error=\(err)\n".utf8))
+            }
         }
     }
 
