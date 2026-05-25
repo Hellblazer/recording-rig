@@ -9,11 +9,17 @@ public struct DriverSpec: Equatable {
     public let surface: String
     public let commands: [String]
     public let recordingSize: Size
+    /// Instruction prologue prepended to the first pasted command. Claude.app
+    /// Chat has no system-prompt CLI flag, so the prologue (which tells the
+    /// model to call rig_checkpoint / rig_turn_end) is delivered as part of the
+    /// composer text. nil/empty when the spec omits it.
+    public let systemPromptPrologue: String?
 
-    public init(surface: String, commands: [String], recordingSize: Size) {
+    public init(surface: String, commands: [String], recordingSize: Size, systemPromptPrologue: String? = nil) {
         self.surface = surface
         self.commands = commands
         self.recordingSize = recordingSize
+        self.systemPromptPrologue = systemPromptPrologue
     }
 }
 
@@ -50,7 +56,9 @@ public enum SpecReader {
             }
         }
 
-        return DriverSpec(surface: surface, commands: commands, recordingSize: size)
+        let prologue = (obj["system_prompt_prologue"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+
+        return DriverSpec(surface: surface, commands: commands, recordingSize: size, systemPromptPrologue: prologue)
     }
 
     public static func load(path: String) throws -> DriverSpec {

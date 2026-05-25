@@ -90,9 +90,16 @@ do {
     // with the record.sh desktop dispatch (rr-2pp.3.3).
     guard let command = spec.commands.first else { fail("no command to drive") }
 
+    // The prologue (rig_checkpoint / rig_turn_end instructions) is delivered as
+    // part of the composer text — Claude.app Chat has no system-prompt flag, so
+    // the first user message is the only channel. Without this the model never
+    // learns to call the rig tools, producing no checkpoints / turn-end
+    // (rr-2pp.3.6 integration finding).
+    let prompt = spec.systemPromptPrologue.map { "\($0)\n\n\(command)" } ?? command
+
     // 3. Composer: set the prompt value (element-scoped, safe).
     let composer = armWait(role: selectors.composer.role, description: selectors.composer.axDescription)
-    guard ax.setValue(composer, command) else { fail("AXValue set failed on composer") }
+    guard ax.setValue(composer, prompt) else { fail("AXValue set failed on composer") }
 
     // 4. Start capture BEFORE the submit (writer session begins on the first
     //    frame's PTS, ahead of the first model output).

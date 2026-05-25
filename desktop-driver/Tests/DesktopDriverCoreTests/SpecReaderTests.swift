@@ -42,6 +42,16 @@ final class SpecReaderTests: XCTestCase {
         XCTAssertEqual(s.commands, ["c"], "empty commands[] falls back to command")
     }
 
+    func testSystemPromptPrologueParsed() throws {
+        let s = try spec(#"{ "agent": { "command": "hi" }, "system_prompt_prologue": "call rig_turn_end" }"#)
+        XCTAssertEqual(s.systemPromptPrologue, "call rig_turn_end")
+    }
+
+    func testSystemPromptPrologueNilWhenAbsentOrEmpty() throws {
+        XCTAssertNil(try spec(#"{ "agent": { "command": "hi" } }"#).systemPromptPrologue)
+        XCTAssertNil(try spec(#"{ "agent": { "command": "hi" }, "system_prompt_prologue": "" }"#).systemPromptPrologue)
+    }
+
     func testNonObjectFailsLoud() {
         XCTAssertThrowsError(try spec("[1,2,3]")) {
             XCTAssertEqual($0 as? DriverError, .badConfig("spec is not a JSON object"))
