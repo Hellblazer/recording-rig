@@ -6,6 +6,7 @@ set -u
 fail=0
 ok() { printf "  ✓  %s\n" "$1"; }
 bad() { printf "  ✗  %s\n" "$1" >&2; fail=$((fail+1)); }
+warn() { printf "  ⚠  %s\n" "$1" >&2; }   # advisory: does NOT fail doctor
 hint() { printf "     → %s\n" "$1" >&2; }
 
 echo "[doctor] checking prereqs..."
@@ -76,6 +77,49 @@ if command -v agg >/dev/null 2>&1; then
     hint "check agg version: agg --version"
   fi
   rm -f "$tmp_cast" "$tmp_gif"
+fi
+
+# 7. Desktop backend (macOS) — opt-in via spec backend:"desktop". These WARN
+#    rather than fail: a CLI-backend user does not need them. (RDR-001 Phase 2.)
+if [[ "$(uname)" == "Darwin" ]]; then
+  # ffmpeg: required for the desktop render (bin/render-webm.sh .mov -> .mp4/.gif).
+  if command -v ffmpeg >/dev/null 2>&1; then
+    ok "ffmpeg on PATH ($(command -v ffmpeg)) — desktop render"
+  else
+    warn "ffmpeg MISSING — required for the desktop backend render (bin/render-webm.sh)"
+    hint "install: brew install ffmpeg"
+  fi
+  # gifski: OPTIONAL — higher-quality GIFs; render-webm falls back to ffmpeg.
+  if command -v gifski >/dev/null 2>&1; then
+    ok "gifski on PATH ($(command -v gifski)) — higher-quality desktop GIFs"
+  else
+    warn "gifski not found — OPTIONAL; render-webm falls back to ffmpeg palettegen"
+    hint "install (recommended for GIF quality): brew install gifski"
+  fi
+  # swiftc: builds bin/desktop-driver (bin/build-desktop-driver.sh).
+  if command -v swiftc >/dev/null 2>&1; then
+    ok "swiftc on PATH ($(command -v swiftc)) — desktop driver build"
+  else
+    warn "swiftc MISSING — required to build bin/desktop-driver"
+    hint "install: xcode-select --install"
+  fi
+  # The desktop record.sh path requires these built/present artifacts; surface
+  # them here so a desktop user who passes doctor doesn't hit a record.sh
+  # preflight failure later (rr-2pp.3.3 integration finding).
+  HERE_DOCTOR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if [[ -x "$HERE_DOCTOR/bin/desktop-driver" ]]; then
+    ok "bin/desktop-driver built"
+  else
+    warn "bin/desktop-driver not built — desktop recordings will fail preflight"
+    hint "build: bin/build-desktop-driver.sh"
+  fi
+  [[ -f "$HERE_DOCTOR/bin/desktop-ax-selectors.json" ]] \
+    && ok "bin/desktop-ax-selectors.json present" \
+    || warn "bin/desktop-ax-selectors.json missing — required by the desktop driver"
+  [[ -x "$HERE_DOCTOR/bin/render-webm.sh" ]] \
+    && ok "bin/render-webm.sh present" \
+    || warn "bin/render-webm.sh missing — required for the desktop render"
+  hint "desktop backend also needs Accessibility + Screen Recording permission (System Settings > Privacy & Security)"
 fi
 
 echo
