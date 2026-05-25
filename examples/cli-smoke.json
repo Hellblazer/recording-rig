@@ -1,0 +1,20 @@
+{
+  "session": "rig-example-cli-smoke",
+  "agent": {
+    "command": "Reply with exactly this line and nothing else: CLI_REGRESSION_OK"
+  },
+  "hooks": {
+    "capture_tools": []
+  },
+  "gates": [],
+  "validate": {
+    "must_contain": ["CLI_REGRESSION_OK"],
+    "must_not_contain": ["step_aborted", "failure_reason"]
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "agg_idle_time_limit": 4,
+    "exit_hold_sec": 6,
+    "tmux_size": "120x40"
+  }
+}
