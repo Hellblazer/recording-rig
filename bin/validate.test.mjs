@@ -212,6 +212,18 @@ test("desktop: empty transcript => FAIL (no rig_turn_end)", () => {
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("desktop: MISSING transcript file => FAIL gracefully (no ENOENT crash)", () => {
+  const dir = sandbox();
+  try {
+    const specPath = join(dir, "spec.json");
+    writeFileSync(specPath, JSON.stringify({ backend: "desktop" }));
+    const r = spawnSync("node", [VALIDATE, specPath, join(dir, "absent.jsonl")], { encoding: "utf8" });
+    assert.equal(r.status, 1, "exits 1, not a crash");
+    assert.match(r.stderr, /transcript not found/);
+    assert.doesNotMatch(r.stderr, /node:fs|ENOENT|at readFileSync/, "no uncaught exception");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("desktop: no checkpoints declared + ends rig_turn_end => PASS", () => {
   const dir = sandbox();
   try {

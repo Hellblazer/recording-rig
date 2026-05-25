@@ -82,7 +82,18 @@ if (backend === "desktop") {
   // Primary input is the bridge transcript: NDJSON, one {ts,tool,args,result,
   // session} per call (bridge/server.js). Structured JSON, so NO cleanCast —
   // this sidesteps the "not a terminal emulator" ghost-text gotcha.
-  const lines = readFileSync(dataPath, "utf8").split(/\r?\n/).filter((l) => l.trim());
+  // A MISSING transcript means the bridge was never reached (no rig tool was
+  // called) — fail loud rather than crash with an uncaught ENOENT.
+  let raw;
+  try {
+    raw = readFileSync(dataPath, "utf8");
+  } catch {
+    console.error("[validate] FAILED");
+    console.error(`  desktop: transcript not found at ${dataPath} — the bridge was never reached`);
+    console.error("           (the model called no rig_* tools: check the .mcpb is enabled in Claude-Rig and loaded before the prompt submits)");
+    process.exit(1);
+  }
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
   const entries = [];
   for (const ln of lines) {
     try {
