@@ -32,6 +32,7 @@ if ! declare -f sentinel_wait_idle >/dev/null 2>&1; then
   _coord_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   # shellcheck source=lib/sentinels.sh
   source "$_coord_here/sentinels.sh"
+  unset _coord_here # don't leak the bootstrap var into the sourcing shell
 fi
 
 # Resolve the provider for a surface. An explicit, non-"auto" coordination value

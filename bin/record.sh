@@ -379,7 +379,7 @@ if [[ "$BACKEND" == "desktop" ]]; then
       fi
     else
       SOFT_MISS=1
-      echo "[rig] desktop: SOFT MISS — no {type:result} in audit.jsonl within turn_timeout ($PROVIDER)" >&2
+      echo "[rig] desktop: SOFT MISS — audit.jsonl appeared but no {type:result} within turn_timeout ($PROVIDER)" >&2
     fi
   elif (( IDLE_RC != 0 )); then
     echo "record: desktop idle-wait did not settle cleanly (rc=$IDLE_RC)" >&2
