@@ -44,4 +44,15 @@ final class SentinelWriterTests: XCTestCase {
         let w = SentinelWriter(directory: "/tmp", session: "gate-smoke")
         XCTAssertEqual(w.path("prompt-submitted"), "/tmp/gate-smoke.prompt-submitted")
     }
+
+    func testWriteToMissingDirectoryFailsLoud() {
+        // The partial write into a nonexistent directory fails — the writer must
+        // surface .sentinelWrite, not silently no-op (fail-loud contract).
+        let w = SentinelWriter(directory: dir + "/does-not-exist", session: "sess")
+        XCTAssertThrowsError(try w.writeMarker("prompt-submitted")) {
+            guard case DriverError.sentinelWrite = $0 else {
+                return XCTFail("expected sentinelWrite, got \($0)")
+            }
+        }
+    }
 }

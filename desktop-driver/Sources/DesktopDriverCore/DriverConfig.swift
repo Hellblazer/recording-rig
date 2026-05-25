@@ -73,7 +73,10 @@ public struct DriverConfig: Equatable {
     }
 
     private static func valueAfter(_ args: [String], _ i: inout Int, flag: String) -> String? {
-        guard i + 1 < args.count else { return nil }
+        // A flag with no value, or immediately followed by another --flag, yields
+        // nil — so `--pid --session s` fails loud as "missing --pid" rather than
+        // silently swallowing "--session" as the pid value.
+        guard i + 1 < args.count, !args[i + 1].hasPrefix("--") else { return nil }
         i += 1
         return args[i]
     }

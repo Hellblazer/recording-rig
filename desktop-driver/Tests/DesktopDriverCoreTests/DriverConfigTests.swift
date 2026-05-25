@@ -66,6 +66,28 @@ final class DriverConfigTests: XCTestCase {
         ) { XCTAssertTrue("\($0)".contains("session")) }
     }
 
+    func testPidAsTrailingFlagOrFollowedByFlagFailsLoud() {
+        // --pid is the final token (no value).
+        XCTAssertThrowsError(
+            try DriverConfig.parse(arguments: ["desktop-driver", "--pid"], environment: [:])
+        ) { XCTAssertEqual($0 as? DriverError, .badConfig("missing --pid")) }
+        // --pid immediately followed by another flag must not swallow it as the value.
+        XCTAssertThrowsError(
+            try DriverConfig.parse(
+                arguments: ["desktop-driver", "--pid", "--session", "s", "--spec", "/s"],
+                environment: [:])
+        ) { XCTAssertEqual($0 as? DriverError, .badConfig("missing --pid")) }
+    }
+
+    func testDuplicateFlagLastWins() throws {
+        // Documents the behavior: last value wins (record.sh never emits dupes).
+        let c = try DriverConfig.parse(
+            arguments: ["desktop-driver", "--pid", "100", "--pid", "200", "--session", "s", "--spec", "/s"],
+            environment: [:]
+        )
+        XCTAssertEqual(c.rigPid, 200)
+    }
+
     func testMissingSpecFailsLoud() {
         XCTAssertThrowsError(
             try DriverConfig.parse(arguments: ["desktop-driver", "--pid", "1", "--session", "s"], environment: [:])
