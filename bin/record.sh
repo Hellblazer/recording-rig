@@ -100,6 +100,19 @@ else
   # record.sh open -n's Claude-Rig and the driver only then dies at config load).
   [[ -f "$HERE/bin/desktop-ax-selectors.json" ]] || {
     echo "record: bin/desktop-ax-selectors.json missing" >&2; exit 2; }
+  # render-webm is the post-capture render — checked here so a missing tool fails
+  # before the recording runs, not after (review rr-2pp.3.3 #1).
+  [[ -x "$HERE/bin/render-webm.sh" ]] || {
+    echo "record: bin/render-webm.sh missing (rr-2pp.3.2)" >&2; exit 2; }
+  # Every gate's for_command (when present) must name a real command, else the
+  # bridge would silently match ANY command (scope-broadening). Fail loud.
+  bad_fc=$(jq -r '
+    ( .agent.commands // (if .agent.command then [.agent.command] else [] end) ) as $cmds
+    | [ (.gates // [])[] | .for_command | select(. != null) | . as $fc | select(($cmds | index($fc)) == null) ]
+    | join(", ")
+  ' "$SPEC")
+  [[ -z "$bad_fc" ]] || {
+    echo "record: gates[].for_command references unknown command(s): $bad_fc" >&2; exit 2; }
 fi
 
 # Preflight: spec sanity.
