@@ -14,6 +14,8 @@ source "$HERE/lib/sentinels.sh"
 source "$HERE/lib/quality.sh"
 # shellcheck disable=SC1091
 source "$HERE/lib/coordination.sh"
+# shellcheck disable=SC1091
+source "$HERE/lib/trusted-folders.sh"
 
 # Dedicated tmux socket per session so the rig:
 # (a) doesn't pollute the user's normal tmux server,
@@ -315,6 +317,25 @@ if [[ "$BACKEND" == "desktop" ]]; then
     || { echo "record: could not resolve coordination provider for surface '$SURFACE'" >&2; exit 1; }
   LAMS_ROOT="$CLAUDE_RIG_DIR/local-agent-mode-sessions"
   echo "[rig] desktop: surface=$SURFACE coordination=$PROVIDER"
+
+  # Pessimistic-case preflight (rr-2pp.5.4): a fallback-provider surface (CoWork)
+  # carries no rig.ask and — until validate.mjs reads audit.jsonl (rr-2pp.5.5) —
+  # no transcript-asserted required checkpoints. Reject such specs BEFORE launch.
+  coordination_preflight_gates "$PROVIDER" "$SPEC" || exit 2
+
+  # Code-surface trusted-folder pre-seeding (rr-2pp.5.3): merge the spec's
+  # desktop.trusted_folders into the profile config so local-agent-mode does not
+  # gate on the per-folder trust dialog mid-recording. Done BEFORE launch so the
+  # app reads the seeded value at startup. Seeded unconditionally: the key is
+  # ignored by the Chat/CoWork surfaces, so there is no need to branch on surface.
+  mapfile -t TRUSTED_FOLDERS < <(jq -r '(.desktop.trusted_folders // [])[]' "$SPEC" 2>/dev/null || true)
+  if (( ${#TRUSTED_FOLDERS[@]} > 0 )); then
+    if trusted_folders_seed "$CLAUDE_RIG_DIR/config.json" "${TRUSTED_FOLDERS[@]}"; then
+      echo "[rig] desktop: pre-seeded ${#TRUSTED_FOLDERS[@]} trusted folder(s) into config.json"
+    else
+      echo "record: warning — trusted-folder pre-seed failed (Code may prompt mid-recording)" >&2
+    fi
+  fi
 
   # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
   open -n -a Claude --args \
