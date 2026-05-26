@@ -9,6 +9,24 @@ bad() { printf "  ✗  %s\n" "$1" >&2; fail=$((fail+1)); }
 warn() { printf "  ⚠  %s\n" "$1" >&2; }   # advisory: does NOT fail doctor
 hint() { printf "     → %s\n" "$1" >&2; }
 
+# Desktop-backend checks + opt-in subcommands live in the sourced seam
+# (lib/desktop-doctor.sh, rr-2pp.6.1). It defines functions only; §7 below runs
+# the checks, the dispatch block here routes the subcommands.
+# shellcheck disable=SC1091
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/desktop-doctor.sh"
+
+# Subcommand mode: `doctor --install-bridge` (etc.) dispatches an opt-in desktop
+# action instead of running the standard checks. macOS-only — a CLI user on
+# another OS gets a clear refusal rather than a confusing unknown-flag error.
+if (( $# > 0 )); then
+  if [[ "$(uname)" != "Darwin" ]]; then
+    echo "doctor: '$1' is a macOS-only desktop subcommand (the desktop backend requires macOS)" >&2
+    exit 2
+  fi
+  _desktop_doctor_dispatch "$@"
+  exit $?
+fi
+
 echo "[doctor] checking prereqs..."
 
 # 1. Binaries on PATH
@@ -81,63 +99,9 @@ fi
 
 # 7. Desktop backend (macOS) — opt-in via spec backend:"desktop". These WARN
 #    rather than fail: a CLI-backend user does not need them. (RDR-001 Phase 2.)
+#    The check bodies live in lib/desktop-doctor.sh (sourced above, rr-2pp.6.1).
 if [[ "$(uname)" == "Darwin" ]]; then
-  # ffmpeg: required for the desktop render (bin/render-webm.sh .mov -> .mp4/.gif).
-  if command -v ffmpeg >/dev/null 2>&1; then
-    ok "ffmpeg on PATH ($(command -v ffmpeg)) — desktop render"
-  else
-    warn "ffmpeg MISSING — required for the desktop backend render (bin/render-webm.sh)"
-    hint "install: brew install ffmpeg"
-  fi
-  # gifski: OPTIONAL — higher-quality GIFs; render-webm falls back to ffmpeg.
-  if command -v gifski >/dev/null 2>&1; then
-    ok "gifski on PATH ($(command -v gifski)) — higher-quality desktop GIFs"
-  else
-    warn "gifski not found — OPTIONAL; render-webm falls back to ffmpeg palettegen"
-    hint "install (recommended for GIF quality): brew install gifski"
-  fi
-  # swiftc: builds bin/desktop-driver (bin/build-desktop-driver.sh).
-  if command -v swiftc >/dev/null 2>&1; then
-    ok "swiftc on PATH ($(command -v swiftc)) — desktop driver build"
-  else
-    warn "swiftc MISSING — required to build bin/desktop-driver"
-    hint "install: xcode-select --install"
-  fi
-  # The desktop record.sh path requires these built/present artifacts; surface
-  # them here so a desktop user who passes doctor doesn't hit a record.sh
-  # preflight failure later (rr-2pp.3.3 integration finding).
-  HERE_DOCTOR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  if [[ -x "$HERE_DOCTOR/bin/desktop-driver" ]]; then
-    ok "bin/desktop-driver built"
-  else
-    warn "bin/desktop-driver not built — desktop recordings will fail preflight"
-    hint "build: bin/build-desktop-driver.sh"
-  fi
-  [[ -f "$HERE_DOCTOR/bin/desktop-ax-selectors.json" ]] \
-    && ok "bin/desktop-ax-selectors.json present" \
-    || warn "bin/desktop-ax-selectors.json missing — required by the desktop driver"
-  [[ -x "$HERE_DOCTOR/bin/render-webm.sh" ]] \
-    && ok "bin/render-webm.sh present" \
-    || warn "bin/render-webm.sh missing — required for the desktop render"
-  hint "desktop backend also needs Accessibility + Screen Recording permission (System Settings > Privacy & Security)"
-
-  # Soft-miss trend (RDR-001 Phase 3 Step 2): warn when the Desktop model is
-  # skipping rig.turn_end too often (instruction drift). Advisory — never fails
-  # doctor. Needs jq; silent on <3 samples (too few to assess).
-  # shellcheck disable=SC1091
-  source "$HERE_DOCTOR/lib/quality.sh"
-  if command -v jq >/dev/null 2>&1; then
-    qlog="$(quality_log_path)"
-    read -r smr_pct smr_n < <(quality_soft_miss_rate "$qlog" 20)
-    if (( smr_n >= 3 )); then
-      if (( smr_pct > 20 )); then
-        warn "desktop soft-miss rate ${smr_pct}% over last ${smr_n} runs (>20%) — model is skipping rig.turn_end"
-        hint "strengthen the system_prompt_prologue (see examples/desktop-chat.json) and re-record; RDR-001 Risk 'instruction drift'. Log: $qlog"
-      else
-        ok "desktop soft-miss rate ${smr_pct}% over last ${smr_n} runs"
-      fi
-    fi
-  fi
+  desktop_doctor_checks
 fi
 
 echo
