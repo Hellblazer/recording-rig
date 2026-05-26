@@ -38,6 +38,13 @@ source "$_DESKTOP_DOCTOR_LIB_DIR/quality.sh"
 # but-disabled is indistinguishable at runtime from the lazy-load miss (rr-yfj),
 # so doctor checks BOTH presence and the flag.
 : "${RIG_BRIDGE_SETTINGS:=$CLAUDE_RIG_DIR/Claude Extensions Settings/local.mcpb.hellblazer.recording-rig-bridge.json}"
+# --install-bridge inputs (rr-5kf). The .mcpb is a plain zip; Claude.app installs
+# it UNPACKED under Claude Extensions/<ext-id>/ (verified live: unzip == the
+# installed dir). The <ext-id> encoding (local.mcpb.<author>.<name>) is
+# Claude.app-internal — re-verify on a Claude.app upgrade (the rr-yfj-class risk).
+: "${RIG_BRIDGE_MCPB:=$_RIG_ROOT/bridge/recording-rig-bridge.mcpb}"
+: "${RIG_BRIDGE_EXT_ID:=local.mcpb.hellblazer.recording-rig-bridge}"
+: "${RIG_BRIDGE_EXT_DIR:=$CLAUDE_RIG_DIR/Claude Extensions/$RIG_BRIDGE_EXT_ID}"
 # Probe caches written by `doctor --probe-surfaces` (rr-3zb); their freshness is
 # how doctor knows the AX selectors + per-surface MCP probe were last validated
 # against the live app. Absent until --probe-surfaces has run in this profile.
@@ -216,7 +223,82 @@ desktop_doctor_checks() {
 # and return non-zero so a caller cannot mistake the stub for a completed action.
 # The router (_desktop_doctor_dispatch) already wires them so the dispatch
 # contract — and the CLI-vs-desktop guard in bin/doctor.sh — can be tested today.
-desktop_install_bridge()    { echo "doctor --install-bridge: not yet implemented (rr-5kf)" >&2; return 3; }
+# _desktop_bridge_enable <settings_file>
+# Merge {"isEnabled": true} into the per-extension settings JSON, preserving every
+# other key (atomic .partial+rename, the trusted-folders.sh precedent). Creates
+# the file/parent if absent. Fails loud (rc 1, no .partial) on malformed JSON so
+# a corrupt settings file is never silently clobbered.
+_desktop_bridge_enable() {
+  local settings="$1" tmp
+  if [[ ! -s "$settings" ]]; then
+    mkdir -p "$(dirname "$settings")"
+    printf '{}' >"$settings"
+  fi
+  tmp="${settings}.partial"
+  if jq '.isEnabled = true' "$settings" >"$tmp" 2>/dev/null; then
+    mv "$tmp" "$settings"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# _desktop_bridge_install_bundle <src_mcpb> <ext_dir>
+# Unpack the .mcpb (a zip) into <ext_dir>, the unpacked layout Claude.app expects.
+# Stages into a sibling temp dir and renames (same-FS atomic) so a half-unzip
+# never lands. Idempotent when the installed content already matches; REFUSES
+# (rc 4, no clobber) when a DIFFERENT bridge is installed — the operator updates
+# via the Claude.app UI rather than have us overwrite their extension.
+_desktop_bridge_install_bundle() {
+  local src="$1" ext_dir="$2" parent staging
+  if [[ ! -f "$src" ]]; then
+    echo "doctor --install-bridge: bundle not found at $src" >&2
+    return 4
+  fi
+  command -v unzip >/dev/null 2>&1 || { echo "doctor --install-bridge: unzip not on PATH" >&2; return 4; }
+
+  parent="$(dirname "$ext_dir")"
+  mkdir -p "$parent"
+  staging="$(mktemp -d "$parent/.rig-bridge-install.XXXXXX")" || return 4
+  if ! unzip -q -o "$src" -d "$staging" 2>/dev/null; then
+    rm -rf "$staging"
+    echo "doctor --install-bridge: failed to unpack $src" >&2
+    return 4
+  fi
+
+  if [[ -e "$ext_dir" ]]; then
+    if diff -rq "$staging" "$ext_dir" >/dev/null 2>&1; then
+      rm -rf "$staging" # already installed, byte-identical — nothing to do
+      return 0
+    fi
+    echo "doctor --install-bridge: a DIFFERENT recording-rig-bridge is already installed at" >&2
+    echo "  $ext_dir" >&2
+    diff -rq "$staging" "$ext_dir" >&2 || true
+    echo "  Refusing to overwrite. Remove or update it in Claude.app Settings > Extensions, then re-run." >&2
+    rm -rf "$staging"
+    return 4
+  fi
+
+  mv "$staging" "$ext_dir" # atomic install
+  return 0
+}
+
+# desktop_install_bridge (rr-5kf) — file-drop the bridge bundle into the
+# Claude-Rig profile and flip its enable flag. Two steps, each refuse-on-collision
+# / no-clobber; the bundle install must succeed before the flag is written.
+desktop_install_bridge() {
+  _desktop_bridge_install_bundle "$RIG_BRIDGE_MCPB" "$RIG_BRIDGE_EXT_DIR" || return $?
+  if ! _desktop_bridge_enable "$RIG_BRIDGE_SETTINGS"; then
+    echo "doctor --install-bridge: bundle staged but the isEnabled flag write failed ($RIG_BRIDGE_SETTINGS)" >&2
+    return 5
+  fi
+  echo "doctor --install-bridge: recording-rig-bridge installed and enabled"
+  echo "  bundle:  $RIG_BRIDGE_EXT_DIR"
+  echo "  enabled: $RIG_BRIDGE_SETTINGS"
+  echo "  restart Claude-Rig (or launch it) for the extension to load."
+  return 0
+}
+
 desktop_install_profile()   { echo "doctor --install-profile: not yet implemented (rr-7u0)" >&2; return 3; }
 desktop_seed_from_primary() { echo "doctor --seed-from-primary: not yet implemented (rr-7u0)" >&2; return 3; }
 desktop_probe_surfaces()    { echo "doctor --probe-surfaces: not yet implemented (rr-3zb)" >&2; return 3; }
