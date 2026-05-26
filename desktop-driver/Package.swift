@@ -28,6 +28,11 @@ let package = Package(
         // Self-contained (ApplicationServices only) so it cannot affect the
         // shipping driver target; staged to bin/ax-dump by build-ax-dump.sh.
         .executableTarget(name: "ax-dump"),
+        // TCC preflight reporter for `doctor` desktop mode (rr-2pp.6.1.1).
+        // Self-contained (AppKit + ApplicationServices); prints
+        // {accessibility,screenRecording} JSON. Staged to bin/perms-check by
+        // build-perms-check.sh.
+        .executableTarget(name: "perms-check"),
         .testTarget(
             name: "DesktopDriverCoreTests",
             dependencies: ["DesktopDriverCore"]
