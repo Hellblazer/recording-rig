@@ -11,7 +11,7 @@
     ],
     "trusted_folders": ["/tmp/rig-code-demo"]
   },
-  "system_prompt_prologue": "Please use these tools as you work: right after you create the file, call the rig_checkpoint tool with name \"created\"; then, as your final step, call the rig_turn_end tool.",
+  "system_prompt_prologue": "First, load the Recording Rig Bridge tools (rig_checkpoint, rig_turn_end) so they are available. Then, in the current working folder, create the file as instructed; right after you create it, call the rig_checkpoint tool with name \"created\"; and as your final step call the rig_turn_end tool.",
   "gates": [],
   "validate": {
     "must_contain": ["created"],
