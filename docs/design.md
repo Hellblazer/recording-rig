@@ -159,6 +159,51 @@ Things that **don't** work and have been ruled out:
 - **Pre-feeding `yes\nyes` to a companion's own prompts.** The input buffers before the companion starts running; the prompt never actually waits.
 - **Running the companion under `claude -p` for gated flows.** Same `AskUserQuestion` failure as the agent pane.
 
+## Desktop backend (Claude.app / Claude-Rig)
+
+The CLI rig's determinism rests on two affordances Claude Code gives and the Claude *desktop app* does **not**: lifecycle hooks (`--settings`) and a PTY. The desktop backend (`backend: "desktop"`, macOS only) records the desktop app's Chat, Code, and CoWork surfaces, where neither exists. It is strictly additive — every desktop change lives inside the `backend == "desktop"` arm of `record.sh`, and the CLI flow stays byte-identical (`examples/cli-smoke.json` is the deterministic regression probe).
+
+![Desktop backend architecture](rdr/RDR-001-architecture.svg)
+
+Three pieces stand in for the missing affordances:
+
+- **AX driving** instead of `tmux send-keys`. The Swift `bin/desktop-driver` sets `AXManualAccessibility` on the app (held for the process lifetime — the flag alone is insufficient), navigates surfaces with `AXPress` on named buttons, sets the composer via `kAXValueAttribute`, and submits with a **process-targeted** `CGEvent(...).postToPid(rigPid)` Return. A global `CGEvent.post(tap:)` leaks keystrokes to whatever is focused and is forbidden.
+- **ScreenCaptureKit** instead of asciinema. SCK captures the window's compositor output by `windowID` to an h264 `.mov`, rendered to `.mp4` + `.gif` by `bin/render-webm.sh`. The CLI cast/`agg` path is untouched.
+- **The `recording-rig-bridge.mcpb`** instead of hooks. The bridge is an MCP extension permanently installed in the Claude-Rig profile, exposing `rig_turn_end`, `rig_checkpoint`, `rig_ask`, `rig_emit`. The model calls them at named beats and the bridge writes the **same** `/tmp/${SESSION}.*` sentinels the CLI hooks write — `record.sh`'s idle watch does not know which backend produced the `turn-end`.
+
+### The determinism gap (acknowledged)
+
+The CLI rig's coordination is **structural**: hooks fire from claude's lifecycle whether or not the model cooperates. The desktop bridge's coordination is **behavioral**: the sentinels exist only because the model *chose* to call the bridge tools. That is a weaker guarantee, and it is the central honest caveat of this backend.
+
+We narrow the gap; we do not close it:
+
+- The `system_prompt_prologue` (prepended to the first composer paste — Claude.app has no system-prompt flag) instructs the model to call the bridge tools at the right beats. Framing is a plain task request, never "you are being recorded".
+- `validate.mjs` refuses to render on a missing turn-end or absent transcript — a session where the model ignored the bridge **never publishes**. It does not synthesize a false pass from an empty transcript.
+- A soft miss (model skipped `rig_turn_end` but the transcript is otherwise present) is logged to `quality.jsonl`, and for `mcp-bridge` a fallback turn-end is synthesized so the run completes with a warning instead of hanging.
+
+The success metric, as for the CLI rig, is **re-take rate**: the RDR-001 Phase 4 gate is 10 clean runs per surface (30/30), zero re-takes.
+
+### Coordination providers
+
+Surface coordination is provider-polymorphic, resolved per `desktop.surface`:
+
+| Surface | Provider | Turn-end signal | Gates / checkpoints |
+|---|---|---|---|
+| Chat | `mcp-bridge` | `rig_turn_end` in the bridge transcript | full (`rig_ask`, required checkpoints) |
+| Code | `mcp-bridge` | same | full |
+| CoWork | `agent-transcript-tail` | first `{"type":"result"}` in the session `audit.jsonl` (after a baseline-epoch guard) | **none** — no `rig.ask` reaches the Linux VM |
+
+`mcp-bridge` is a byte-identical passthrough to the CLI idle watch. `agent-transcript-tail` tails `<profile>/local-agent-mode-sessions/<acct>/<org>/local_<sess>/audit.jsonl`; the originally-planned `coworkd-log-tail` was **disproven by a live probe** — `coworkd.log` carries transport lifecycle events but no per-turn signal. Because fallback providers cannot surface `rig.ask` or assert required checkpoints, `record.sh` **preflight-rejects** any spec that puts `gates[]` or `desktop.checkpoints[].required` on a fallback surface, rather than silently dropping them.
+
+### Cost-of-learning gotchas (Desktop-specific)
+
+Like the CLI `PostToolUse` matcher semantics, these are observed against a specific app build and must be **re-verified on a Claude.app upgrade**.
+
+- **The app lazily loads MCP extension tools (observed v1.8555.2 / Electron 41.6.1).** Newer Claude.app does not pre-inject an extension's tools into the model context; the model must *load the integration* before it can call its tools ("Loaded tools, used Recording Rig Bridge integration"). A prologue that merely says "call `rig_checkpoint`" produces **zero** `rig_*` calls — the model answers and never loads the bridge. The prologue must lead with an explicit "**load the Recording Rig Bridge tools first**". Earlier app versions pre-injected the tools, so this is an upgrade-surfaced regression (bead rr-yfj).
+- **The bridge must be installed *and* enabled.** Install is a file-drop into the profile's `extensions-installations.json`; enablement is a per-profile toggle (Connectors UI, recorded as `isEnabled` under `Claude Extensions Settings/<id>.json`). A bridge that is installed but disabled looks exactly like the lazy-load miss (no `rig_*` calls) — verify both before a run.
+- **The Code surface needs its working folder pre-selected once.** The native "Open folder…" panel (`NSOpenPanel`) is **not AX-drivable**. The selection persists in the profile, so it is a one-time manual setup; the `desktop.trusted_folders` seed (written into `config.json`'s `localAgentModeTrustedFolders`) handles *trust*, not *selection*. Driver-side auto-selection is deferred.
+- **One Claude-Rig instance at a time.** Two instances against the same profile make the driver attach to the wrong window and stall — it surfaces as "stuck at the folder picker". `record.sh` waits for any prior main instance to quit before launching its own; a stalled desktop run should first check for a stray `--user-data-dir=…/Claude-Rig` process.
+
 ## Failure modes worth remembering
 
 - **"DONE banner present, ship it" is insufficient.** A wrap script that prints `DONE` unconditionally will mask silent aborts. The validator must check **positive content signals** (specific expected substrings in the agent's output), not just the trailing banner.
