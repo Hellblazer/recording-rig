@@ -250,12 +250,13 @@ _desktop_bridge_enable() {
     printf '{}' >"$settings"
   fi
   tmp="${settings}.partial"
-  if jq '.isEnabled = true' "$settings" >"$tmp" 2>/dev/null; then
-    mv "$tmp" "$settings"
-  else
-    rm -f "$tmp"
-    return 1
+  # jq AND mv must both succeed; a failed mv (full disk, cross-device, perms)
+  # must not leave the .partial behind nor be mistaken for success.
+  if jq '.isEnabled = true' "$settings" >"$tmp" 2>/dev/null && mv "$tmp" "$settings"; then
+    return 0
   fi
+  rm -f "$tmp"
+  return 1
 }
 
 # _desktop_bridge_install_bundle <src_mcpb> <ext_dir>
@@ -271,6 +272,14 @@ _desktop_bridge_install_bundle() {
     return 4
   fi
   command -v unzip >/dev/null 2>&1 || { echo "doctor --install-bridge: unzip not on PATH" >&2; return 4; }
+
+  # Defense-in-depth (zip-slip): macOS InfoZip unzip does NOT strip ".." entries,
+  # so a crafted .mcpb (e.g. via a RIG_BRIDGE_MCPB override) could escape the
+  # staging dir on extraction. Refuse any path-traversal or absolute entry first.
+  if unzip -Z1 "$src" 2>/dev/null | grep -Eq '(^|/)\.\.(/|$)|^/'; then
+    echo "doctor --install-bridge: bundle contains path-traversal or absolute entries — refusing $src" >&2
+    return 4
+  fi
 
   parent="$(dirname "$ext_dir")"
   mkdir -p "$parent"
@@ -357,8 +366,21 @@ desktop_seed_from_primary() {
   }
   mkdir -p "$CLAUDE_RIG_DIR"
 
-  # No-clobber: refuse if the Rig profile already holds any seed artifact.
   local rel
+  # Defense-in-depth: RIG_SEED_AUTH_PATHS is env-overridable, so reject any entry
+  # that could escape the profile (".." traversal or an absolute path) BEFORE it
+  # reaches the mkdir/cp below.
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    case "$rel" in
+      /* | ../* | */../* | */.. | ..)
+        echo "doctor --seed-from-primary: refusing unsafe seed path '$rel' (traversal/absolute)" >&2
+        return 2
+        ;;
+    esac
+  done <<< "$RIG_SEED_AUTH_PATHS"
+
+  # No-clobber: refuse if the Rig profile already holds any seed artifact.
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
     if [[ -e "$CLAUDE_RIG_DIR/$rel" ]]; then
@@ -483,7 +505,7 @@ desktop_probe_surfaces() {
   # One bounded AX snapshot — ax-dump loops, so background it and reap (macOS has
   # no `timeout`). The stub-friendly bound is RIG_PROBE_SECONDS (default 6s).
   local snapfile axpid snapshot
-  snapfile="$(mktemp)"
+  snapfile="$(mktemp)" || { echo "doctor --probe-surfaces: mktemp failed" >&2; return 4; }
   "$RIG_AXDUMP" "$pid" 1 >"$snapfile" 2>/dev/null &
   axpid=$!
   sleep "${RIG_PROBE_SECONDS:-6}"

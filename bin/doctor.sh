@@ -11,9 +11,16 @@ hint() { printf "     → %s\n" "$1" >&2; }
 
 # Desktop-backend checks + opt-in subcommands live in the sourced seam
 # (lib/desktop-doctor.sh, rr-2pp.6.1). It defines functions only; §7 below runs
-# the checks, the dispatch block here routes the subcommands.
+# the checks, the dispatch block here routes the subcommands. Guard the source
+# (no set -e here): a missing lib would otherwise surface as an opaque
+# "command not found" on the first desktop_* call.
+_DOCTOR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/desktop-doctor.sh"
+if [[ ! -f "$_DOCTOR_LIB" ]]; then
+  echo "doctor: lib/desktop-doctor.sh not found at $_DOCTOR_LIB — recording-rig install incomplete" >&2
+  exit 2
+fi
 # shellcheck disable=SC1091
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/desktop-doctor.sh"
+source "$_DOCTOR_LIB"
 
 # Subcommand mode: `doctor --install-bridge` (etc.) dispatches an opt-in desktop
 # action instead of running the standard checks. macOS-only — a CLI user on

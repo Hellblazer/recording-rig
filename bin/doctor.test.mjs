@@ -91,7 +91,7 @@ test("doctor no-arg: every relocated Desktop WARN check still appears", { skip: 
   const perms = join(dir, "perms-check");
   writeFileSync(perms, `#!/usr/bin/env bash\necho '{"accessibility":false,"screenRecording":false}'\n`);
   chmodSync(perms, 0o755);
-  const { out, status } = runDoctorArgs([], {
+  const { out } = runDoctorArgs([], {
     RIG_QUALITY_LOG: "/dev/null",
     RIG_PERMS_CHECK: perms,
     CLAUDE_RIG_DIR: join(dir, "Claude-Rig"), // absent profile -> warn
@@ -120,11 +120,11 @@ test("doctor no-arg: every relocated Desktop WARN check still appears", { skip: 
   // Exact System Settings pane hints preserved.
   assert.match(out, /System Settings > Privacy & Security > Accessibility/);
   assert.match(out, /System Settings > Privacy & Security > Screen Recording/);
-  // Desktop checks are advisory — none emit a hard-fail ✗ marker.
+  // Desktop checks are advisory — none emit a hard-fail ✗ marker (guards against
+  // a future change flipping a desktop warn() to bad()). The script's exit code
+  // is deliberately NOT asserted: sections 1-6 are live prereq checks that vary
+  // by environment (the file-level discipline at the top of this file).
   assert.doesNotMatch(out, /✗ +(ffmpeg|swiftc|Claude\.app|Accessibility|Screen Recording|Claude-Rig|recording-rig-bridge|AX-selector|surface MCP)/);
-  // CLI hard checks pass on this machine -> exit 0 despite the desktop WARNs
-  // (the advisory checks never change the exit code).
-  assert.equal(status, 0, out);
 });
 
 test("doctor --verify-bridge dispatches and skips the standard checks", { skip: !darwin }, () => {
