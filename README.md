@@ -177,16 +177,19 @@ enabled** in the `Claude-Rig` profile (see `docs/design.md`).
 ```jsonc
 {
   "backend": "desktop",                // "cli" (default) | "desktop"
-  "surface": "chat",                   // TOP-LEVEL. which Desktop surface to drive.
-                                       //   "chat" today; "code"/"cowork" are Phase 4.
+  "surface": "chat",                   // TOP-LEVEL. which Desktop surface to drive:
+                                       //   "chat" | "code"  → mcp-bridge (full gates/checkpoints)
+                                       //   "cowork"         → agent-transcript-tail (no gates)
   "session": "rig-example-desktop-chat",
   "agent": { "command": "Reply with a one-sentence friendly greeting." },
 
   // Prepended to the FIRST command pasted into the composer — Claude.app has no
   // system-prompt CLI flag, so this is how the model learns to call the rig tools.
-  // Use a plain "please use these tools" request; a "you are being recorded" framing
-  // trips the model's injection-resistance and it refuses (see docs/design.md).
-  "system_prompt_prologue": "Please use these tools as you work: right after you write your greeting, call rig_checkpoint with name \"greeted\"; then, as your final step, call rig_turn_end.",
+  // LEAD with "load the Recording Rig Bridge tools first": newer Claude.app (observed
+  // v1.8555.2) lazy-loads extension tools, so a prologue that only says "call
+  // rig_checkpoint" yields ZERO rig_* calls. Use a plain task request; a "you are
+  // being recorded" framing trips injection-resistance (see docs/design.md).
+  "system_prompt_prologue": "First, load the Recording Rig Bridge tools (rig_checkpoint, rig_turn_end) so they are available. Then write your greeting, immediately call rig_checkpoint with name \"greeted\", and as your final step call rig_turn_end.",
 
   "desktop": {
     "checkpoints": [                   // named rig_checkpoint calls to assert in the transcript
@@ -226,6 +229,25 @@ Desktop-specific behavior:
 - **`gates[]`** work as in CLI, answered via the bridge's `rig_ask`.
 - **Diagnose**: `/recording-rig:diagnose <session> [spec]` runs `bin/diagnose-desktop.sh` —
   checkpoint coverage, soft-miss trend, capture coverage, and bridge-log liveness.
+- **Surfaces & coordination**: Chat and Code use the **bridge** (`rig_*` tools → transcript);
+  CoWork uses **agent-transcript-tail** (turn-end is the `{"type":"result"}` line in the
+  session `audit.jsonl`). CoWork can't surface `rig_ask`, so `record.sh` preflight-rejects any
+  spec that puts `gates[]` or a `required` checkpoint on it (rather than silently dropping them).
+- **Example specs**: `examples/desktop-chat.json`, `examples/desktop-code.json`,
+  `examples/desktop-cowork.json` — one per surface, each recorded 10× clean in the Phase 4 gate.
+
+#### One-time manual setup (per `Claude-Rig` profile)
+
+The bridge and the Code working folder are **not** scriptable end-to-end; do these once:
+
+- **Enable the bridge connector.** The `recording-rig-bridge.mcpb` must be both installed *and*
+  **enabled** in the `Claude-Rig` profile's Connectors UI. An installed-but-disabled bridge looks
+  exactly like the lazy-load miss — the model makes **no** `rig_*` calls and the run fails with an
+  empty transcript. (Needed for Chat/Code; CoWork doesn't use the bridge.)
+- **Select the Code working folder once.** The Code surface needs a working folder chosen in its
+  native "Open folder…" panel, which is **not** AX-drivable. The choice persists in the profile, so
+  it's a one-time step. `desktop.trusted_folders` only pre-seeds *trust* (it writes
+  `localAgentModeTrustedFolders` in the profile `config.json`); it does **not** select the folder.
 
 ## Architecture
 
