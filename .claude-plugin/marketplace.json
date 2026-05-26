@@ -10,10 +10,10 @@
       "source": {
         "source": "git",
         "url": "https://github.com/Hellblazer/recording-rig.git",
-        "ref": "v0.1.2"
+        "ref": "v0.2.0"
       },
       "description": "Hook-driven framework for recording deterministic Claude Code sessions (tutorials, demos, screencasts, fixtures). Drives an isolated child claude under tmux + asciinema + agg, coordinates via lifecycle-hook sentinels (no TUI scraping), validates the cast, renders a GIF.",
-      "version": "0.1.2"
+      "version": "0.2.0"
     }
   ]
 }
