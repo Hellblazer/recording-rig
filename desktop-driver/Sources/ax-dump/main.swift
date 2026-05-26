@@ -30,7 +30,7 @@ import Foundation
 // the net for non-button UI like the Code folder picker (menu items / cells).
 let interestingRoles: Set<String> = {
   if let env = ProcessInfo.processInfo.environment["RIG_AXDUMP_ROLES"], !env.isEmpty {
-    return Set(env.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+    return Set(env.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
   }
   return ["AXTextArea", "AXTextField", "AXButton"]
 }()

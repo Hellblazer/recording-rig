@@ -355,7 +355,7 @@ if [[ "$BACKEND" == "desktop" ]]; then
   RIG_QUIT_WAIT="${RIG_QUIT_WAIT:-30}"
   _waited=0
   while p="$(rig_main_pid || true)"; [[ -n "$p" ]]; do
-    (( _waited == 0 )) && echo "[rig] desktop: waiting for an existing Claude-Rig instance (pid $p) to quit..." >&2
+    (( _waited == 0 )) && echo "[rig] desktop: waiting for an existing Claude-Rig instance (pid $p) to quit..."
     if (( _waited >= RIG_QUIT_WAIT )); then
       echo "record: a Claude-Rig instance (pid $p) is still running after ${_waited}s — quit it first (⌘Q)." >&2
       echo "        record.sh launches its own clean instance; a second one collides and the driver" >&2
@@ -365,7 +365,7 @@ if [[ "$BACKEND" == "desktop" ]]; then
     sleep 2
     _waited=$((_waited + 2))
   done
-  (( _waited > 0 )) && echo "[rig] desktop: prior instance gone after ${_waited}s; launching." >&2
+  (( _waited > 0 )) && echo "[rig] desktop: prior instance gone after ${_waited}s; launching."
 
   # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
   open -n -a Claude --args \

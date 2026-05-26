@@ -140,7 +140,7 @@ coordination_transcript_path() {
   local provider="$1" root="${2:-}" baseline="${3:-0}"
   case "$provider" in
     agent-transcript-tail) _coord_newest_audit "$root" "$baseline" ;;
-    mcp-bridge) printf '' ;;
+    mcp-bridge) : ;; # empty -> record.sh validates the bridge transcript
     *)
       echo "coordination: unknown provider '$provider'" >&2
       return 1
