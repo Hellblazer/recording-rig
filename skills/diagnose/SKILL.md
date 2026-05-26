@@ -87,7 +87,7 @@ For a `backend: "desktop"` run there is no cast — the primary inputs are the b
 bin/diagnose-desktop.sh ${SESSION} ${SPEC}    # SPEC optional but enables checkpoint coverage
 ```
 
-The helper is read-only and emits four sections. Interpret them against the desktop failure modes:
+The helper is read-only and emits four detail sections plus a closing `--- summary ---`. **Read the summary first** — it integrates the four sections into one `primary:` verdict (the most-fundamental failure, via a fixed priority ladder: bridge-never-reached → missing-required-checkpoint → turn-never-closed → no-capture → capture-gap → instruction-drift → soft-miss-note → healthy) and a `next:` fix pointer. Lead your report with it, then expand using the cited detail section below.
 
 ### (a) checkpoint coverage
 
@@ -115,7 +115,9 @@ HAR / Playwright-trace forensics do not exist for the desktop backend — there 
 
 ## Reporting
 
-For each diagnosed failure, state:
+Lead with the single most-likely root cause, then support it. For a desktop run that
+means opening with the helper's `--- summary ---` `primary:` verdict; for CLI, the first
+matching taxonomy entry. Then, for the diagnosed failure, state:
 1. **Symptom** (what the rig produced)
 2. **Root cause** (which failure mode from the taxonomy)
 3. **Fix** (specific spec change, env var, or command)

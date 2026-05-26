@@ -55,6 +55,14 @@ function fixture(opts = {}) {
   const qlog = join(qDir, "quality.jsonl");
   if (quality.length) writeFileSync(qlog, quality.join("\n") + "\n");
 
+  // A present .mov (fake bytes; ffprobe can't read it -> capture verdict
+  // "unknown", which does NOT fire the NO-CAPTURE summary rung). Lets the
+  // lower-priority summary rungs (soft-miss / synthesized-note / healthy) be
+  // reached in tests despite the default fixture having no .mov.
+  if (opts.mov !== undefined) {
+    writeFileSync(join(tmpRoot, `${session}.mov`), opts.mov);
+  }
+
   if (opts.bridgeLog !== undefined) {
     writeFileSync(join(logsDir, "mcp-server-Recording Rig Bridge.log"), opts.bridgeLog);
   }
@@ -198,4 +206,68 @@ test("reports a missing transcript (bridge never reached)", () => {
   const r = run(fixture({ transcript: [] }));
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /transcript:.*(MISSING|not found)/i);
+});
+
+// --- rr-2pp.6.3: synthesized summary verdict (--- summary --- / primary:) ---
+// The summary integrates sections (a)-(d) into one PRIMARY verdict via a fixed
+// priority ladder. Distinct `primary:` label (not `verdict:`) so these never
+// collide with the per-section verdict assertions above.
+
+test("summary: a 'summary' section with a single primary verdict is always emitted", () => {
+  const r = run(fixture({ mov: "x" }));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /--- summary ---/);
+  assert.match(r.stdout, /^primary: /m);
+});
+
+test("summary rung 1: missing transcript -> bridge never reached (outranks all)", () => {
+  const r = run(fixture({ transcript: [] }));
+  assert.match(r.stdout, /primary: bridge never reached/);
+});
+
+test("summary rung 2: missing required checkpoint", () => {
+  const r = run(fixture({
+    mov: "x", // present so NO-CAPTURE (rung 4) cannot pre-empt
+    transcript: [tline("rig_turn_end", {}, { ok: true })], // 'compiled' never called
+  }));
+  assert.match(r.stdout, /primary: missing required checkpoint\(s\): compiled/);
+});
+
+test("summary rung 3: turn_end absent (checkpoints complete)", () => {
+  const r = run(fixture({
+    mov: "x",
+    transcript: [tline("rig_checkpoint", { name: "compiled" }, { ok: true })], // no turn_end
+  }));
+  assert.match(r.stdout, /primary: turn never closed/);
+});
+
+test("summary rung 4: no .mov -> no usable screen capture", () => {
+  // Default fixture has no .mov; transcript is healthy so rungs 1-3 don't fire.
+  const r = run(fixture());
+  assert.match(r.stdout, /primary: no usable screen capture/);
+});
+
+test("summary rung 6: soft-miss trend >20% -> instruction drift", () => {
+  const r = run(fixture({
+    mov: "x",
+    quality: [qrow(false), qrow(false), qrow(true), qrow(true)], // 50% over 4 (>=3, >20%)
+  }));
+  assert.match(r.stdout, /primary: instruction drift/);
+});
+
+test("summary rung 7: synthesized turn_end this run is a non-fatal note", () => {
+  const r = run(fixture({
+    mov: "x",
+    transcript: [
+      tline("rig_checkpoint", { name: "compiled" }, { ok: true }),
+      tline("rig_turn_end", {}, { ok: true, synthesized: true }),
+    ],
+  }));
+  assert.match(r.stdout, /primary: .*soft miss/i);
+  assert.match(r.stdout, /synthesized/i);
+});
+
+test("summary rung 8: healthy run -> no failure detected", () => {
+  const r = run(fixture({ mov: "x" })); // default healthy transcript + present mov
+  assert.match(r.stdout, /primary: no failure detected/);
 });
