@@ -9,16 +9,22 @@
 //   desktop backend:        validate.mjs <spec.json> <transcript.jsonl> [<mov>]
 //
 // Text modes (under spec.validate), applied to the recording's text corpus —
-// the cleaned asciinema cast (CLI) or the raw bridge transcript JSONL (desktop):
+// the cleaned asciinema cast (CLI) or the raw transcript JSONL (desktop):
 //   must_contain:           array of strings, set membership (any order)
 //   must_contain_in_order:  array of strings, must appear in given order
 //   must_not_contain:       array of strings, none may appear
 //
-// Desktop adds (spec.desktop.checkpoints[] of {name, required}):
-//   - every required:true checkpoint must appear, in spec-declared order
-//     (matched against rig_checkpoint transcript entries by args.name)
-//   - the last transcript call must be rig_turn_end
-//   - an optional .mov is a WARN-only ffprobe sanity check (never gates the GIF)
+// Desktop has two transcript sources, chosen by the surface's coordination
+// provider (mirrors lib/coordination.sh):
+//   - mcp-bridge (Chat/Code): the bridge transcript. Every required:true
+//     checkpoint (spec.desktop.checkpoints[]) must appear in spec-declared order
+//     (matched against rig_checkpoint entries by args.name); the last call must
+//     be rig_turn_end.
+//   - agent-transcript-tail (CoWork): the Agent-SDK transcript audit.jsonl. The
+//     bridge tools are dropped here, so turn-end is the explicit {"type":"result"}
+//     line (a clean close requires is_error !== true); required checkpoints are
+//     rejected at preflight (rr-2pp.5.4), so only must_* text modes apply.
+// An optional .mov is a WARN-only ffprobe sanity check (never gates the GIF).
 
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -73,17 +79,33 @@ function cleanCast(s) {
   return out.join("").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
 }
 
-// `text` is the corpus the must_* assertions run against; `extraFailures`
-// holds backend-specific hard failures (desktop checkpoint / turn-end).
-let text;
-const extraFailures = [];
+// Desktop coordination provider for this surface — mirrors
+// lib/coordination.sh coordination_provider_for_surface (the RDR-locked map):
+// an explicit spec.coordination wins; otherwise cowork -> agent-transcript-tail,
+// chat/code -> mcp-bridge. Selects how the transcript at dataPath is read.
+function desktopProvider(s) {
+  const explicit = s.coordination ?? "auto";
+  if (explicit && explicit !== "auto") return explicit;
+  const surface = s.surface ?? "chat";
+  if (surface === "cowork") return "agent-transcript-tail";
+  // chat/code -> mcp-bridge. An unrecognized surface defaults to mcp-bridge:
+  // acceptable because record.sh's preflight resolves+validates the surface via
+  // coordination_provider_for_surface (which fails loud) before launch. But warn
+  // here so a spec that somehow reaches the validator with a bad surface is not
+  // silently bridge-validated — and so this map can't silently drift from the
+  // bash one without a signal.
+  if (surface !== "chat" && surface !== "code") {
+    console.error(`[validate] WARN: unrecognized surface '${surface}' — defaulting to mcp-bridge validation`);
+  }
+  return "mcp-bridge";
+}
 
-if (backend === "desktop") {
-  // Primary input is the bridge transcript: NDJSON, one {ts,tool,args,result,
-  // session} per call (bridge/server.js). Structured JSON, so NO cleanCast —
-  // this sidesteps the "not a terminal emulator" ghost-text gotcha.
-  // A MISSING transcript means the bridge was never reached (no rig tool was
-  // called) — fail loud rather than crash with an uncaught ENOENT.
+// mcp-bridge surfaces (Chat / Code): the bridge transcript is NDJSON, one
+// {ts,tool,args,result,session} per call (bridge/server.js). Structured JSON, so
+// NO cleanCast — sidesteps the ghost-text gotcha. A MISSING transcript means the
+// bridge was never reached. Returns the text corpus; pushes hard failures
+// (missing/out-of-order checkpoints, missing turn-end) onto extraFailures.
+function validateBridgeTranscript(dataPath, spec, extraFailures) {
   let raw;
   try {
     raw = readFileSync(dataPath, "utf8");
@@ -102,11 +124,10 @@ if (backend === "desktop") {
       /* tolerate a malformed trailing line */
     }
   }
-  text = lines.join("\n");
 
   // Every required checkpoint must appear, in spec-declared order. Checkpoints
-  // are rig_checkpoint transcript entries keyed by args.name (the same name the
-  // bridge writes as the /tmp/${SESSION}.checkpoint content).
+  // are rig_checkpoint entries keyed by args.name (the name the bridge writes as
+  // the /tmp/${SESSION}.checkpoint content).
   const required = (spec.desktop?.checkpoints ?? [])
     .filter((c) => c.required)
     .map((c) => c.name);
@@ -117,21 +138,16 @@ if (backend === "desktop") {
   // Report ALL missing checkpoints (not just the first) — clearer for debugging
   // a multi-checkpoint spec.
   for (const name of required) {
-    if (!seenSet.has(name)) {
-      extraFailures.push(`required checkpoint '${name}' missing`);
-    }
+    if (!seenSet.has(name)) extraFailures.push(`required checkpoint '${name}' missing`);
   }
-  // Among the required checkpoints that ARE present, verify spec-declared order
-  // via a monotonic cursor; a present-but-too-early checkpoint is out of order.
+  // Among present required checkpoints, verify spec-declared order via a
+  // monotonic cursor; a present-but-too-early checkpoint is out of order.
   let cursor = 0;
   for (const name of required) {
     if (!seenSet.has(name)) continue;
     const idx = seen.indexOf(name, cursor);
-    if (idx === -1) {
-      extraFailures.push(`required checkpoint '${name}' out of order`);
-    } else {
-      cursor = idx + 1;
-    }
+    if (idx === -1) extraFailures.push(`required checkpoint '${name}' out of order`);
+    else cursor = idx + 1;
   }
 
   // The last call must be rig_turn_end (the turn closed cleanly).
@@ -139,6 +155,61 @@ if (backend === "desktop") {
   if (!last || last.tool !== "rig_turn_end") {
     extraFailures.push(`last transcript call must be rig_turn_end (was '${last?.tool ?? "none"}')`);
   }
+  return lines.join("\n");
+}
+
+// agent-transcript-tail surfaces (CoWork, + Code recovery): the bridge tools are
+// dropped on CoWork (the remoteMcpServersConfig race), so rig_checkpoint /
+// rig_turn_end never appear. Validate against the host-side Claude-Agent-SDK
+// transcript audit.jsonl (RDR-001 §Technical Design, amended 2026-05-25), whose
+// explicit {"type":"result"} line is the turn-end. dataPath is that audit.jsonl.
+// Required checkpoints are rejected at preflight for this provider
+// (rr-2pp.5.4 coordination_preflight_gates), so none are enforced here; the
+// must_* text assertions carry CoWork's validation.
+function validateAgentTranscript(dataPath, extraFailures) {
+  let raw;
+  try {
+    raw = readFileSync(dataPath, "utf8");
+  } catch {
+    console.error("[validate] FAILED");
+    console.error(`  desktop: agent transcript not found at ${dataPath} — no audit.jsonl (the turn never ran)`);
+    process.exit(1);
+  }
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  const entries = [];
+  for (const ln of lines) {
+    try {
+      entries.push(JSON.parse(ln));
+    } catch {
+      /* tolerate a malformed trailing line */
+    }
+  }
+  // Turn-end = the last {"type":"result"} entry; a clean close requires a falsy
+  // is_error (false/absent). Truthy is treated as an errored turn (defensive vs
+  // a non-boolean), which is the safe direction for a turn-end gate.
+  const result = entries.filter((e) => e?.type === "result").pop();
+  if (!result) {
+    extraFailures.push(`no {type:"result"} entry in audit.jsonl — the turn never completed`);
+  } else if (result.is_error) {
+    extraFailures.push(
+      `turn ended in error (result.is_error=true${result.subtype ? `, subtype='${result.subtype}'` : ""})`,
+    );
+  }
+  return lines.join("\n");
+}
+
+// `text` is the corpus the must_* assertions run against; `extraFailures`
+// holds backend-specific hard failures (desktop checkpoint / turn-end).
+let text;
+const extraFailures = [];
+
+if (backend === "desktop") {
+  // Pick how to read the transcript at dataPath from the surface's coordination
+  // provider: mcp-bridge surfaces (Chat/Code) produce the bridge transcript;
+  // agent-transcript-tail (CoWork) produces the Agent-SDK audit.jsonl.
+  text = desktopProvider(spec) === "agent-transcript-tail"
+    ? validateAgentTranscript(dataPath, extraFailures)
+    : validateBridgeTranscript(dataPath, spec, extraFailures);
 
   // Optional .mov sanity — WARN only, never gates the GIF (the bead is explicit).
   if (movPath) {
