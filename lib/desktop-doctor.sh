@@ -63,6 +63,8 @@ IndexedDB}"
 # against the live app. Absent until --probe-surfaces has run in this profile.
 : "${RIG_SELECTOR_CACHE:=$CLAUDE_RIG_DIR/.recording-rig/ax-selectors.probe.json}"
 : "${RIG_PROBE_CACHE:=$CLAUDE_RIG_DIR/.recording-rig/surface-probe.json}"
+# --probe-surfaces uses the read-only AX dumper (rr-3zb); overridable for tests.
+: "${RIG_AXDUMP:=$_RIG_ROOT/bin/ax-dump}"
 
 # Exact System Settings panes (asserted by the tests; the operator pastes these).
 RIG_PANE_ACCESSIBILITY="System Settings > Privacy & Security > Accessibility"
@@ -384,8 +386,123 @@ desktop_seed_from_primary() {
   echo "  $RIG_PRIMARY_PROFILE -> $CLAUDE_RIG_DIR"
   return 0
 }
-desktop_probe_surfaces()    { echo "doctor --probe-surfaces: not yet implemented (rr-3zb)" >&2; return 3; }
-desktop_verify_bridge()     { echo "doctor --verify-bridge: not yet implemented (rr-3zb)" >&2; return 3; }
+# _desktop_bridge_verify_shape <json_response>
+# 0 iff the response matches one of the two known MCP tool-result transport
+# shapes (the design gotcha "tool_response shape varies by transport"):
+#   - array form (HTTP):  [{"type":"text","text":"..."}]
+#   - string form (stdio): a JSON-encoded string
+# Anything else is transport drift -> rc 1.
+_desktop_bridge_verify_shape() {
+  local resp="$1"
+  if jq -e 'type=="array" and length>0 and (.[0].type=="text") and (.[0].text|type=="string")' <<<"$resp" >/dev/null 2>&1; then
+    return 0
+  fi
+  if jq -e 'type=="string"' <<<"$resp" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# desktop_verify_bridge (rr-3zb) — spawn the installed bridge server over stdio,
+# issue one benign tools/call, and assert the result transport shape. The bridge
+# is a standalone line-delimited JSON-RPC node server (no live Claude.app
+# needed); rig_emit with no active session writes nothing (orphan-logged), and
+# RIG_TMP isolation keeps even that out of the real /tmp namespace. Catches
+# server-side transport-format drift before a recording silently mis-reads it.
+desktop_verify_bridge() {
+  local server="$RIG_BRIDGE_EXT_DIR/server.js"
+  if [[ ! -f "$server" ]]; then
+    echo "doctor --verify-bridge: bridge server not found at $server" >&2
+    echo "  install it first: doctor --install-bridge" >&2
+    return 4
+  fi
+  command -v node >/dev/null 2>&1 || { echo "doctor --verify-bridge: node not on PATH" >&2; return 4; }
+
+  local req resp content tmp
+  tmp="$(mktemp -d)"
+  req='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rig_emit","arguments":{"name":"__doctor_verify__"}}}'
+  resp="$(printf '%s\n' "$req" | RIG_TMP="$tmp" node "$server" 2>/dev/null | head -1)"
+  rm -rf "$tmp"
+
+  if [[ -z "$resp" ]]; then
+    echo "doctor --verify-bridge: no response from the bridge server" >&2
+    return 4
+  fi
+  # The tool-call payload lives under .result.content (array transport); fall
+  # back to .result for transports that hand back the bare value.
+  content="$(jq -c '.result.content // .result' <<<"$resp" 2>/dev/null)"
+  if _desktop_bridge_verify_shape "$content"; then
+    echo "doctor --verify-bridge: bridge responds with a well-formed tool result"
+    return 0
+  fi
+  echo "doctor --verify-bridge: unexpected bridge response shape — possible transport drift" >&2
+  echo "  response: $resp" >&2
+  return 4
+}
+
+# _desktop_write_probe_cache <file> <payload_json>
+# Atomically write a timestamped cache record {generated_at, data:<payload>} so
+# the doctor freshness checks (_desktop_cache_fresh) can read its mtime and the
+# embedded timestamp. .partial+rename; fail loud (rc 1) on a bad payload.
+_desktop_write_probe_cache() {
+  local file="$1" payload="$2" ts tmp
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  mkdir -p "$(dirname "$file")"
+  tmp="${file}.partial"
+  if jq -nc --arg ts "$ts" --argjson body "$payload" '{generated_at:$ts, data:$body}' >"$tmp" 2>/dev/null; then
+    mv "$tmp" "$file"
+  else
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# desktop_probe_surfaces (rr-3zb) — LIVE: snapshot the running Claude-Rig AX tree
+# (bin/ax-dump) and record per-surface probe state into timestamped caches that
+# the doctor freshness checks consume. The AX selectors discovered here are NOT
+# auto-promoted into bin/desktop-ax-selectors.json (the driver's hand-tuned
+# input) — the operator reviews the cache and promotes deliberately.
+desktop_probe_surfaces() {
+  # Resolve the running Claude-Rig MAIN pid (carries --user-data-dir, not --type=).
+  local pid="" p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    ps -o command= -p "$p" 2>/dev/null | grep -q -- "--type=" || { pid="$p"; break; }
+  done < <(pgrep -f -- "--user-data-dir=$CLAUDE_RIG_DIR" 2>/dev/null || true)
+  if [[ -z "$pid" ]]; then
+    echo "doctor --probe-surfaces: no running Claude-Rig instance found" >&2
+    echo "  launch it first (doctor --install-profile), then re-run" >&2
+    return 4
+  fi
+  [[ -x "$RIG_AXDUMP" ]] || {
+    echo "doctor --probe-surfaces: ax-dump not built at $RIG_AXDUMP" >&2
+    echo "  build it: bin/build-ax-dump.sh" >&2
+    return 4
+  }
+
+  # One bounded AX snapshot — ax-dump loops, so background it and reap (macOS has
+  # no `timeout`). The stub-friendly bound is RIG_PROBE_SECONDS (default 6s).
+  local snapfile axpid snapshot
+  snapfile="$(mktemp)"
+  "$RIG_AXDUMP" "$pid" 1 >"$snapfile" 2>/dev/null &
+  axpid=$!
+  sleep "${RIG_PROBE_SECONDS:-6}"
+  kill "$axpid" 2>/dev/null || true
+  wait "$axpid" 2>/dev/null || true
+  snapshot="$(cat "$snapfile")"
+  rm -f "$snapfile"
+
+  # Selector cache: the AX snapshot text (wrapped as a JSON string).
+  _desktop_write_probe_cache "$RIG_SELECTOR_CACHE" "$(jq -Rs '.' <<<"$snapshot")" || return 5
+  # Probe cache: per-surface reachability record (pid recorded; surface probes
+  # land as the live MCP-probe matures — the cache shape is forward-stable).
+  _desktop_write_probe_cache "$RIG_PROBE_CACHE" "$(jq -nc --arg pid "$pid" '{rig_pid:$pid, surfaces:[]}')" || return 5
+
+  echo "doctor --probe-surfaces: wrote probe caches (rig pid $pid)"
+  echo "  selectors: $RIG_SELECTOR_CACHE"
+  echo "  probe:     $RIG_PROBE_CACHE"
+  return 0
+}
 
 # _desktop_doctor_dispatch <subcommand> [args...]
 # Pure router: map a doctor subcommand flag to its handler, forwarding args.
