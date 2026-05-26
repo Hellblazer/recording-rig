@@ -12,6 +12,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$HERE/lib/sentinels.sh"
 # shellcheck disable=SC1091
 source "$HERE/lib/quality.sh"
+# shellcheck disable=SC1091
+source "$HERE/lib/coordination.sh"
 
 # Dedicated tmux socket per session so the rig:
 # (a) doesn't pollute the user's normal tmux server,
@@ -303,6 +305,17 @@ if [[ "$BACKEND" == "desktop" ]]; then
   mv "${ACTIVE_SESSION}.partial" "$ACTIVE_SESSION"
   echo "[rig] desktop: active-session=$SESSION rig-config=$RIG_CONFIG_OUT"
 
+  # Coordination provider per surface (RDR-001 §Technical Design, amended
+  # 2026-05-25): Chat/Code -> mcp-bridge (the sentinel watch below, unchanged);
+  # CoWork -> agent-transcript-tail (audit.jsonl {type:result}). surface is a
+  # TOP-LEVEL spec field (matches SpecReader.swift); coordination defaults to auto.
+  SURFACE=$(jq -r '.surface // "chat"' "$SPEC" 2>/dev/null || echo "chat")
+  COORD_OVERRIDE=$(jq -r '.coordination // "auto"' "$SPEC" 2>/dev/null || echo "auto")
+  PROVIDER=$(coordination_provider_for_surface "$SURFACE" "$COORD_OVERRIDE") \
+    || { echo "record: could not resolve coordination provider for surface '$SURFACE'" >&2; exit 1; }
+  LAMS_ROOT="$CLAUDE_RIG_DIR/local-agent-mode-sessions"
+  echo "[rig] desktop: surface=$SURFACE coordination=$PROVIDER"
+
   # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
   open -n -a Claude --args \
     --user-data-dir="$CLAUDE_RIG_DIR" \
@@ -322,36 +335,51 @@ if [[ "$BACKEND" == "desktop" ]]; then
   [[ -n "$RIG_PID" ]] || { echo "record: could not resolve Claude-Rig pid" >&2; exit 1; }
   echo "[rig] desktop: Claude-Rig pid=$RIG_PID"
 
+  # Baseline for agent-transcript-tail: only an audit.jsonl modified at/after
+  # submit is a turn-end candidate, so a completed prior run's stale
+  # {type:result} cannot read as this turn's end. Empty for mcp-bridge.
+  COORD_BASELINE=$(coordination_ready "$PROVIDER")
+
   # Driver: AX-drive + capture. Writes prompt-submitted + the .mov; waits on
   # agent-done (written below) to stop + finishWriting().
   "$HERE/bin/desktop-driver" --pid "$RIG_PID" --spec "$SPEC" &
   DRIVER_PID=$!
 
-  # record.sh owns the turn-end watch (same ceilings as the CLI driver).
+  # record.sh owns the turn-end watch (same ceilings as the CLI driver), now
+  # routed through the per-surface provider. mcp-bridge is the existing
+  # sentinel_wait_idle (byte-identical); agent-transcript-tail tails audit.jsonl.
   # Capture the return code without tripping `set -e` (rc 2 = soft miss).
   IDLE_RC=0
-  sentinel_wait_idle "$IDLE_SECONDS" "$TURN_TIMEOUT_SEC" "$SESSION_MAX_SEC" || IDLE_RC=$?
-  # rc 2 = pacing.turn_timeout_sec elapsed with no turn-end progress. If the
-  # model still produced output (transcript has entries), this is a soft miss:
-  # synthesize a fallback rig_turn_end so the recording COMPLETES (GIF +
-  # warning) instead of hard-failing, and flag it for the quality log. An empty
-  # transcript means the bridge was never reached — a hard miss the validator
-  # reports; we do not synthesize it into a false pass. (RDR-001 Risk
-  # "instruction drift".)
-  # rc 0 = turn-end sentinel existed and was idle for $IDLE_SECONDS; in the
-  # desktop backend ONLY bridge/server.js writes that sentinel (on a rig_turn_end
-  # call), so rc 0 implies the model closed the turn itself — never a soft miss.
+  coordination_wait_turn_end "$PROVIDER" "$IDLE_SECONDS" "$TURN_TIMEOUT_SEC" "$SESSION_MAX_SEC" \
+    "$LAMS_ROOT" "$COORD_BASELINE" || IDLE_RC=$?
+  # rc 2 = pacing.turn_timeout_sec elapsed with no turn-end progress (a soft
+  # miss); rc 0 = turn-end observed; rc 1 = session ceiling. The soft-miss
+  # SYNTHESIS is mcp-bridge-only: it validates against the bridge transcript, so
+  # a fallback rig_turn_end there lets the run COMPLETE (GIF + warning) instead
+  # of hard-failing. An empty transcript means the bridge was never reached — a
+  # hard miss the validator reports; we never synthesize that into a false pass.
+  # agent-transcript-tail reads turn-end from audit.jsonl (not the bridge
+  # transcript), so there is nothing to synthesize there; the soft miss is still
+  # logged, and full CoWork validation reconciliation is rr-2pp.5.4/5.5.
   SOFT_MISS=0
-  if (( IDLE_RC == 2 )) && [[ -s "$TRANSCRIPT_OUT" ]]; then
-    SOFT_MISS=1
-    # Synthesis is best-effort: a failure here must NOT abort the run (the EXIT
-    # trap would then SIGTERM the driver mid-flush). Let it fall through to
-    # validate — which fails on the missing turn-end and refuses the GIF — while
-    # still logging the soft miss below.
-    if quality_synthesize_turn_end "$TRANSCRIPT_OUT" "$SESSION"; then
-      echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; synthesized fallback turn-end" >&2
+  if (( IDLE_RC == 2 )); then
+    if [[ "$PROVIDER" == "mcp-bridge" ]]; then
+      if [[ -s "$TRANSCRIPT_OUT" ]]; then
+        SOFT_MISS=1
+        # Synthesis is best-effort: a failure here must NOT abort the run (the
+        # EXIT trap would then SIGTERM the driver mid-flush). Let it fall through
+        # to validate — which fails on the missing turn-end and refuses the GIF.
+        if quality_synthesize_turn_end "$TRANSCRIPT_OUT" "$SESSION"; then
+          echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; synthesized fallback turn-end" >&2
+        else
+          echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; fallback synthesis FAILED" >&2
+        fi
+      else
+        echo "record: desktop idle-wait did not settle cleanly (rc=$IDLE_RC)" >&2
+      fi
     else
-      echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; fallback synthesis FAILED" >&2
+      SOFT_MISS=1
+      echo "[rig] desktop: SOFT MISS — audit.jsonl appeared but no {type:result} within turn_timeout ($PROVIDER)" >&2
     fi
   elif (( IDLE_RC != 0 )); then
     echo "record: desktop idle-wait did not settle cleanly (rc=$IDLE_RC)" >&2
@@ -369,9 +397,7 @@ if [[ "$BACKEND" == "desktop" ]]; then
   fi
 
   # Soft-miss aggregation: one entry per desktop run (rr-2pp.4.2). Desktop-only —
-  # the CLI path stays byte-identical (rr-2pp.4.4).
-  # surface is a TOP-LEVEL spec field (matches SpecReader.swift; desktop-chat.json).
-  SURFACE=$(jq -r '.surface // "chat"' "$SPEC" || echo "chat")
+  # the CLI path stays byte-identical (rr-2pp.4.4). SURFACE was resolved above.
   quality_log_append "$(jq -nc \
     --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
     --arg session "$SESSION" \
