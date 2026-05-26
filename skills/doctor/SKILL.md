@@ -1,56 +1,54 @@
 ---
 name: doctor
-description: Verify that recording-rig prereqs are installed and working. Use when the user asks "is recording-rig set up", "check my rig install", "/recording-rig:doctor", or before any first-time recording. Checks tmux, jq, asciinema, agg, node, bash version, claude login state, and consent dialogs.
+description: Verify that recording-rig prereqs are installed and working, or run an opt-in macOS desktop setup subcommand. Use when the user asks "is recording-rig set up", "check my rig install", "/recording-rig:doctor", before a first-time recording, or to install/probe the desktop backend (bridge, profile, surfaces). Wraps bin/doctor.sh — CLI binary/version/login checks plus the macOS desktop advisories and the --install-*/--probe-surfaces/--verify-bridge subcommands.
 ---
 
 # doctor
 
-Verify the host can run a recording end-to-end before the user tries.
+Verify the host can run a recording end-to-end before the user tries — and, on macOS,
+set up / probe the desktop backend.
 
-## Checks (run via Bash, in order)
+## How it runs
 
-1. **Binaries on PATH** — fail loudly if missing, suggest install command:
-   ```bash
-   for b in tmux jq asciinema agg claude node; do
-     if ! command -v $b >/dev/null; then echo "MISSING: $b"; fi
-   done
-   ```
-   Suggested installs (macOS): `brew install tmux jq asciinema agg node`. `claude` install is per Anthropic's instructions.
+`"${CLAUDE_PLUGIN_ROOT}/bin/doctor.sh"` is the single source of truth — run it and
+report its output; do not re-implement the checks inline. Forward any argument verbatim:
 
-2. **bash version 4+** — record.sh refuses to run on bash 3.2 (macOS default).
-   ```bash
-   bash -c '(( BASH_VERSINFO[0] >= 4 )) && echo OK || echo "bash too old: $BASH_VERSION (need 4+; brew install bash)"'
-   ```
+```bash
+"${CLAUDE_PLUGIN_ROOT}/bin/doctor.sh" $ARGUMENTS
+```
 
-3. **asciinema version + output format** — v3 defaults to asciicast-v3; the rig forces v2. Confirm `asciinema rec --help | grep -q asciicast-v2`.
+- **No argument** → all prereq checks (below). Exit 0 = all hard checks passed.
+- **A desktop subcommand** → that opt-in action instead of the checks (macOS only).
 
-4. **claude is logged in**:
-   ```bash
-   claude --version
-   ```
-   If this prompts for login, route the user to `claude login` first.
+## Checks (no-argument run)
 
-5. **tmux can spawn a detached session** (sanity check, isolates tmux config breakage):
-   ```bash
-   tmux new-session -d -s rig-doctor-$$ 'sleep 1' && tmux kill-session -t rig-doctor-$$
-   ```
+1. **Binaries on PATH** — `tmux`, `jq`, `asciinema`, `agg`, `claude`, `node` (hard fail if missing). Suggested installs (macOS): `brew install tmux jq asciinema agg node`; `claude` per Anthropic's instructions.
+2. **bash 4+** — record.sh refuses bash 3.2 (macOS default); `brew install bash`.
+3. **asciinema output format** — the rig forces asciicast-v2 (v3 defaults to v3).
+4. **claude logged in** — `claude --version` succeeds, else route to `claude login`.
+5. **tmux can spawn a detached session** — isolates tmux-config breakage.
+6. **agg can render a trivial cast.**
+7. **macOS desktop advisories** (Darwin only; WARN, never fail — a CLI user needs none of them): ffmpeg/gifski/swiftc, Claude.app present, Accessibility + Screen Recording permission (via `bin/perms-check`), the Claude-Rig profile, the bridge installed **and** enabled, the AX-selector + surface probe-cache freshness, and the soft-miss trend.
 
-6. **agg can render a trivial cast**:
-   ```bash
-   printf '{"version":2,"width":80,"height":24}\n[0.1,"o","hello\\n"]\n' > /tmp/rig-doctor.cast
-   agg /tmp/rig-doctor.cast /tmp/rig-doctor.gif && rm /tmp/rig-doctor.cast /tmp/rig-doctor.gif
-   ```
+## Desktop subcommands (macOS, opt-in)
 
-7. **Consent state (informational only)** — first time on a machine, the user must accept claude's `--dangerously-skip-permissions` consent once. The recording-rig's consent-sweep handles this automatically, but it adds ~25s to the first recording. Mention this to set expectations.
+Forwarded to `bin/doctor.sh` by argument. These are mutating / live actions; each says up
+front what it changes and refuses on collision. Reach them as `/recording-rig:doctor <flag>`.
+
+- `--install-bridge` — install + enable the recording-rig-bridge in the Claude-Rig profile.
+- `--install-profile` — create the isolated profile and wait for an interactive login.
+- `--seed-from-primary` — copy the primary profile's web-session auth into Claude-Rig.
+- `--probe-surfaces` — validate the live surfaces against a running Claude-Rig and refresh the probe caches (prerequisite for authoring a desktop spec).
+- `--verify-bridge` — call a bridge tool and assert the response transport shape (catches drift).
 
 ## Reporting
 
-If all checks pass: report "doctor: all checks passed" with one summary line.
-
-If any fail: list the failures with the exact install command for each. Don't proceed to recording until they're fixed.
+- All checks pass → report "doctor: all checks passed" with one summary line.
+- Any hard check fails → list each failure with its exact install command; don't proceed to recording.
+- Desktop advisories are WARN — surface them, but they never block a CLI recording.
 
 ## What this skill does NOT do
 
-- Install anything (the host's package manager is the user's responsibility).
-- Modify the user's `~/.claude/` state (consent acceptance happens during real recordings, not here).
-- Run an actual recording (route to the `record` skill for that).
+- Install host packages (the package manager is the user's responsibility).
+- Modify `~/.claude/` state on a no-argument run. (The desktop subcommands DO mutate the Claude-Rig profile — that is their explicit purpose, and they refuse on collision.)
+- Run an actual recording (route to the `record` skill).
