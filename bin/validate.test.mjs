@@ -53,6 +53,17 @@ function cast(text) {
   return CAST_HEADER + "\n" + JSON.stringify([0.1, "o", text]) + "\n";
 }
 
+// Build an Agent-SDK audit.jsonl (CoWork / agent-transcript-tail) from event objects.
+function audit(events) {
+  return events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+}
+// A clean CoWork turn: init, a tool call, then a successful result.
+const AUDIT_OK = [
+  { type: "system", subtype: "init" },
+  { type: "assistant", message: { content: [{ type: "tool_use", name: "Write" }] } },
+  { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "created notes.txt" },
+];
+
 // ── CLI path must stay byte-identical in behavior ───────────────────────────
 
 test("CLI cast: must_contain present => PASS (exit 0)", () => {
@@ -241,5 +252,122 @@ test("SKIP_VALIDATE=1 short-circuits the desktop path too", () => {
       { dataName: "t.jsonl", dataContent: transcript([{ tool: "rig_checkpoint", args: { name: "x" } }]),
         env: { SKIP_VALIDATE: "1" } });
     assert.equal(r.code, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// --- desktop agent-transcript-tail (CoWork) — audit.jsonl validation (rr-2pp.5.5) ---
+
+test("desktop/cowork: audit.jsonl with a clean result PASSES", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", surface: "cowork" },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: missing {type:result} FAILS (turn never completed)", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", surface: "cowork" },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK.filter((e) => e.type !== "result")) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /no \{type:"result"\} entry/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: result.is_error true FAILS (turn ended in error)", () => {
+  const dir = sandbox();
+  try {
+    const ev = [...AUDIT_OK.slice(0, -1), { type: "result", subtype: "error_max_turns", is_error: true }];
+    const r = run(dir, { backend: "desktop", surface: "cowork" },
+      { dataName: "audit.jsonl", dataContent: audit(ev) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /turn ended in error/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: must_contain matches the audit transcript text", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", surface: "cowork", validate: { must_contain: ["created notes.txt"] } },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: missing must_contain FAILS", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", surface: "cowork", validate: { must_contain: ["NOPE not present"] } },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /missing required/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: must_not_contain present FAILS", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", surface: "cowork", validate: { must_not_contain: ["created notes.txt"] } },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /forbidden present/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: required checkpoints are NOT enforced here (preflight handles them)", () => {
+  // A required checkpoint on a fallback surface is rejected at preflight (5.4),
+  // not by validate — so a clean result PASSES even with one declared.
+  const dir = sandbox();
+  try {
+    const r = run(dir,
+      { backend: "desktop", surface: "cowork", desktop: { checkpoints: [{ name: "built", required: true }] } },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop: explicit coordination override routes to the audit reader", () => {
+  // surface=chat is normally mcp-bridge, but an explicit coordination wins.
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", surface: "chat", coordination: "agent-transcript-tail" },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: missing audit.jsonl FAILS loud", () => {
+  const dir = sandbox();
+  try {
+    const specPath = join(dir, "spec.json");
+    writeFileSync(specPath, JSON.stringify({ backend: "desktop", surface: "cowork" }));
+    const r = spawnSync("node", [VALIDATE, specPath, join(dir, "absent-audit.jsonl")], { encoding: "utf8" });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /agent transcript not found/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: must_contain_in_order against the audit transcript text", () => {
+  const dir = sandbox();
+  try {
+    const r = run(dir, { backend: "desktop", surface: "cowork", validate: { must_contain_in_order: ["tool_use", "result"] } },
+      { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/cowork: the LAST {type:result} decides (a later success after an early error PASSES)", () => {
+  const dir = sandbox();
+  try {
+    const ev = [
+      { type: "result", subtype: "error_partial", is_error: true },
+      { type: "assistant", message: { content: [{ type: "text", text: "retrying" }] } },
+      { type: "result", subtype: "success", is_error: false, result: "ok" },
+    ];
+    const r = run(dir, { backend: "desktop", surface: "cowork" },
+      { dataName: "audit.jsonl", dataContent: audit(ev) });
+    assert.equal(r.code, 0, r.stderr);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
