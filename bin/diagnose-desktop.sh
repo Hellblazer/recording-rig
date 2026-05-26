@@ -68,6 +68,16 @@ _iso_to_epoch() {
   date -j -f "%Y-%m-%dT%H:%M:%S" "$iso" +%s 2>/dev/null || true
 }
 
+# --- summary state ---------------------------------------------------------
+# set -u-safe defaults; sections (a)-(d) refine these, the closing `--- summary
+# ---` section integrates them into one PRIMARY verdict (rr-2pp.6.3). Defaults
+# are chosen so an unrefined signal never fires a false primary verdict.
+SUM_TX_MISSING=0    # 1 when the transcript is absent/empty (bridge never reached)
+SUM_TE="na"         # turn_end: absent | synthesized | genuine | na
+SUM_MISSING=""      # space-joined missing REQUIRED checkpoint names ("" = none/unknown)
+SUM_SOFTMISS_HIGH=0 # 1 when the soft-miss rate >20% over >=3 runs
+SUM_CAP="na"        # capture: none | empty | gap | ok | unknown | na
+
 echo "[diagnose-desktop] session=${SESSION} backend=desktop"
 
 # --- artifacts -------------------------------------------------------------
@@ -78,6 +88,7 @@ if [[ -s "$TRANSCRIPT" ]]; then
   echo "transcript: $TRANSCRIPT (${TX_COUNT} entries)"
 else
   echo "transcript: MISSING ($TRANSCRIPT) — the bridge was never reached (no rig_* tool called)"
+  SUM_TX_MISSING=1
 fi
 if [[ -s "$MOV" ]]; then
   echo "mov:        $MOV ($(wc -c < "$MOV" | tr -d ' ') bytes)"
@@ -86,6 +97,16 @@ else
 fi
 [[ -f "$RIG_CONFIG" ]] && echo "rig-config: present" || echo "rig-config: MISSING"
 [[ -n "$SPEC" ]] && echo "spec:       $SPEC" || echo "spec:       (not provided)"
+
+# turn_end status is a property of the transcript (independent of whether a spec
+# was provided), so compute it once here — section (a) prints it (when it has a
+# spec) and the closing summary's rung 3 reads it regardless.
+if [[ -s "$TRANSCRIPT" ]]; then
+  SUM_TE="$(jq -Rrs "$NDJSON_OBJ_ARRAY"' | map(select(.tool=="rig_turn_end")) | last
+        | if . == null then "absent"
+          elif (.result.synthesized == true) then "synthesized"
+          else "genuine" end' "$TRANSCRIPT" 2>/dev/null || echo "absent")"
+fi
 
 # --- (a) checkpoint coverage ----------------------------------------------
 echo "--- (a) checkpoint coverage ---"
@@ -104,17 +125,15 @@ else
       [ ($spec[0].desktop.checkpoints // [])[] | select(.required) | .name
         | select( . as $n | ($called | index($n)) | not ) ]
       | join(" ")' 2>/dev/null || echo "")"
+  SUM_MISSING="$MISSING"
   if [[ -n "$MISSING" ]]; then
     echo "MISSING REQUIRED: $MISSING"
   else
     echo "complete: all required checkpoints called"
   fi
-  # turn_end: genuine, synthesized fallback (rr-2pp.4.2), or absent.
-  TE="$(jq -Rrs "$NDJSON_OBJ_ARRAY"' | map(select(.tool=="rig_turn_end")) | last
-        | if . == null then "absent"
-          elif (.result.synthesized == true) then "synthesized"
-          else "genuine" end' "$TRANSCRIPT" 2>/dev/null || echo "absent")"
-  case "$TE" in
+  # turn_end: genuine, synthesized fallback (rr-2pp.4.2), or absent (computed
+  # spec-independently after the artifacts section; reused by the summary).
+  case "$SUM_TE" in
     synthesized) echo "turn_end: present (synthesized) — model skipped it; record.sh synthesized the fallback (soft miss)" ;;
     genuine)     echo "turn_end: present (genuine) — model closed the turn itself" ;;
     *)           echo "turn_end: ABSENT — the turn never closed (validator FAILs; no GIF)" ;;
@@ -140,6 +159,7 @@ else
   echo "this-session: no quality.jsonl entry for this session"
 fi
 if (( SMR_N >= 3 )) && (( SMR_PCT > 20 )); then
+  SUM_SOFTMISS_HIGH=1
   echo "verdict: soft-miss rate >20% — instruction drift; strengthen the prologue (RDR-001 Risk 'instruction drift')"
 fi
 
@@ -158,21 +178,34 @@ echo "transcript_span_s: $SPAN"
 if [[ ! -s "$MOV" ]]; then
   echo "mov_duration_s: (mov MISSING) — capture produced no .mov; the SCStream/AVAssetWriter path failed"
   echo "verdict: NO CAPTURE"
+  SUM_CAP=none
 elif ! command -v ffprobe >/dev/null 2>&1; then
   echo "mov_duration_s: (ffprobe unavailable — install ffmpeg to enable the capture-coverage check)"
   echo "verdict: unknown (no ffprobe)"
+  SUM_CAP=unknown
 else
   DUR="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$MOV" 2>/dev/null || echo "")"
   echo "mov_duration_s: ${DUR:-unknown}"
   if [[ -n "$DUR" && "$SPAN" != "unknown" ]]; then
     # awk: float-safe comparison. A .mov much shorter than the tool-call span
-    # means the capture stopped before the turn finished.
-    awk -v d="$DUR" -v w="$SPAN" 'BEGIN{
+    # means the capture stopped before the turn finished. Capture the verdict so
+    # the summary (rung 4/5) can read it without re-running ffprobe.
+    CAP_OUT="$(awk -v d="$DUR" -v w="$SPAN" 'BEGIN{
       printf "delta_s: %.2f\n", d - w;
       if (d < 1) print "verdict: CAPTURE EMPTY (mov ~0s)";
       else if (d < w) print "verdict: CAPTURE GAP (mov shorter than the tool-call span)";
       else print "verdict: ok (mov brackets the tool-call span)";
-    }'
+    }')"
+    printf '%s\n' "$CAP_OUT"
+    case "$CAP_OUT" in
+      *"CAPTURE EMPTY"*) SUM_CAP=empty ;;
+      *"CAPTURE GAP"*)   SUM_CAP=gap ;;
+      *)                 SUM_CAP=ok ;;
+    esac
+  else
+    # mov present but unmeasurable (ffprobe could not read a duration) — not a
+    # capture failure we can assert, so it must not fire the NO-CAPTURE rung.
+    SUM_CAP=unknown
   fi
 fi
 
@@ -192,5 +225,37 @@ fi
 # --- forensics excluded ----------------------------------------------------
 echo "--- forensics excluded ---"
 echo "HAR / Playwright-trace: N/A (AX pivot — no CDP transport; RDR §Diagnose path)"
+
+# --- summary ----------------------------------------------------------------
+# Integrate sections (a)-(d) into ONE primary verdict via a fixed priority
+# ladder (most-fundamental failure first). The diagnose skill leads its forensic
+# report with this `primary:` line, then expands with the cited section. The
+# distinct `primary:` label (not the per-section `verdict:`) keeps it
+# unambiguous. Advisory only — read-only, never gates (script contract).
+echo "--- summary ---"
+if (( SUM_TX_MISSING == 1 )); then
+  echo "primary: bridge never reached — no rig_* tool was called"
+  echo "next: confirm the bridge is installed AND enabled in Claude-Rig (doctor --verify-bridge), and that the chat/code system_prompt_prologue leads with loading the bridge tools (rr-yfj). See (d)."
+elif [[ -n "$SUM_MISSING" ]]; then
+  echo "primary: missing required checkpoint(s): $SUM_MISSING"
+  echo "next: model-cooperation failure (validator FAILs, no GIF) — strengthen the system_prompt_prologue and re-record. See (a)."
+elif [[ "$SUM_TE" == "absent" ]]; then
+  echo "primary: turn never closed (no rig_turn_end, no fallback)"
+  echo "next: the validator FAILs and no GIF renders — the bridge may have dropped mid-turn. See (a)/(d)."
+elif [[ "$SUM_CAP" == "none" || "$SUM_CAP" == "empty" ]]; then
+  echo "primary: no usable screen capture"
+  echo "next: check Screen Recording permission (System Settings > Privacy & Security) and bin/doctor.sh. See (c)."
+elif [[ "$SUM_CAP" == "gap" ]]; then
+  echo "primary: screen capture stopped before the turn finished"
+  echo "next: a driver crash, an early agent-done, or a permission revoked mid-run. See (c)."
+elif (( SUM_SOFTMISS_HIGH == 1 )); then
+  echo "primary: instruction drift (soft-miss trend >20%)"
+  echo "next: the prologue is not reliably steering the model — strengthen it, or accept this surface/version's determinism floor. See (b)."
+elif [[ "$SUM_TE" == "synthesized" ]]; then
+  echo "primary: no blocking failure — one soft miss this run (rig_turn_end synthesized; GIF still produced)"
+  echo "next: a single synthesized turn_end is tolerable — watch the soft-miss trend in (b)."
+else
+  echo "primary: no failure detected — the run looks healthy"
+fi
 
 exit 0
