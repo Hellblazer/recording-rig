@@ -10,7 +10,7 @@
       { "name": "greeted", "required": true }
     ]
   },
-  "system_prompt_prologue": "Please use these tools as you work: right after you write your greeting, call the rig_checkpoint tool with name \"greeted\"; then, as your final step, call the rig_turn_end tool.",
+  "system_prompt_prologue": "First, load the Recording Rig Bridge tools (rig_checkpoint, rig_turn_end) so they are available. Then write your greeting, immediately call the rig_checkpoint tool with name \"greeted\", and as your final step call the rig_turn_end tool.",
   "gates": [],
   "validate": {
     "must_contain": ["greeted"],
