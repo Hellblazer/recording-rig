@@ -45,6 +45,19 @@ source "$_DESKTOP_DOCTOR_LIB_DIR/quality.sh"
 : "${RIG_BRIDGE_MCPB:=$_RIG_ROOT/bridge/recording-rig-bridge.mcpb}"
 : "${RIG_BRIDGE_EXT_ID:=local.mcpb.hellblazer.recording-rig-bridge}"
 : "${RIG_BRIDGE_EXT_DIR:=$CLAUDE_RIG_DIR/Claude Extensions/$RIG_BRIDGE_EXT_ID}"
+# --install-profile / --seed-from-primary inputs (rr-7u0). The web sessionKey
+# (A7, ~28d TTL) lives in the Chromium profile, NOT the electron-store oauth key
+# — so the seed copies the session-bearing artifacts (RDR-001 §A7: Cookies, Local
+# Storage, IndexedDB) and NEVER config.json (that would clobber Rig's trusted
+# folders + dxt allowlist). Newline-separated, profile-relative, overridable;
+# only artifacts that exist in the primary are copied. Confirm the set on a live
+# --seed-from-primary (Claude.app-internal layout, the rr-yfj-class risk).
+: "${RIG_PRIMARY_PROFILE:=$HOME/Library/Application Support/Claude}"
+: "${RIG_SEED_AUTH_PATHS:=Cookies
+Cookies-journal
+Local Storage
+Session Storage
+IndexedDB}"
 # Probe caches written by `doctor --probe-surfaces` (rr-3zb); their freshness is
 # how doctor knows the AX selectors + per-surface MCP probe were last validated
 # against the live app. Absent until --probe-surfaces has run in this profile.
@@ -299,8 +312,78 @@ desktop_install_bridge() {
   return 0
 }
 
-desktop_install_profile()   { echo "doctor --install-profile: not yet implemented (rr-7u0)" >&2; return 3; }
-desktop_seed_from_primary() { echo "doctor --seed-from-primary: not yet implemented (rr-7u0)" >&2; return 3; }
+# desktop_install_profile (rr-7u0) — create the isolated Claude-Rig profile and
+# (interactively) wait for the operator to log in. REFUSES if any Claude.app is
+# running: a concurrent OAuth login across two instances collides (RDR-001 A9).
+# The launch + login wait is LIVE-ONLY — gated behind an interactive stdin so the
+# tests exercise the guard + dir creation without a real app or a blocking read.
+desktop_install_profile() {
+  if pgrep -x Claude >/dev/null 2>&1; then
+    echo "doctor --install-profile: a Claude.app instance is running — quit it first" >&2
+    echo "  (a concurrent OAuth login across instances collides, RDR-001 A9)" >&2
+    return 6
+  fi
+  mkdir -p "$CLAUDE_RIG_DIR"
+  echo "doctor --install-profile: created Claude-Rig profile dir at $CLAUDE_RIG_DIR"
+  if [[ -t 0 ]]; then
+    echo "Launching Claude-Rig — log in, then return here and press Enter."
+    open -n -a Claude --args --user-data-dir="$CLAUDE_RIG_DIR" --force-renderer-accessibility
+    read -r -p "Press Enter once you have logged in to Claude-Rig... " _
+    echo "doctor --install-profile: done — verify with: doctor (desktop checks)"
+  else
+    echo "doctor --install-profile: non-interactive — skipping the launch + login wait"
+    echo "  run this in a terminal to complete login, or use doctor --seed-from-primary"
+  fi
+  return 0
+}
+
+# desktop_seed_from_primary (rr-7u0) — copy the primary profile's web-session
+# auth artifacts into the Rig profile (alternative to an interactive login).
+# REFUSES if a Claude.app is running (it may be mid-write on these files, A9) and
+# no-clobbers if the Rig profile already carries any of them (never overwrite an
+# existing session). Copies only artifacts present in the primary, preserving
+# mtime (cp -Rp).
+desktop_seed_from_primary() {
+  if pgrep -x Claude >/dev/null 2>&1; then
+    echo "doctor --seed-from-primary: a Claude.app instance is running — quit it first" >&2
+    echo "  (it may be writing the auth state you are copying, RDR-001 A9)" >&2
+    return 6
+  fi
+  [[ -d "$RIG_PRIMARY_PROFILE" ]] || {
+    echo "doctor --seed-from-primary: primary profile not found at $RIG_PRIMARY_PROFILE" >&2
+    return 7
+  }
+  mkdir -p "$CLAUDE_RIG_DIR"
+
+  # No-clobber: refuse if the Rig profile already holds any seed artifact.
+  local rel
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    if [[ -e "$CLAUDE_RIG_DIR/$rel" ]]; then
+      echo "doctor --seed-from-primary: the Rig profile already has auth state ('$rel')" >&2
+      echo "  refusing to clobber an existing session — recreate the profile to re-seed" >&2
+      return 8
+    fi
+  done <<< "$RIG_SEED_AUTH_PATHS"
+
+  # Copy each present artifact, preserving mtime.
+  local copied=0
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    if [[ -e "$RIG_PRIMARY_PROFILE/$rel" ]]; then
+      mkdir -p "$CLAUDE_RIG_DIR/$(dirname "$rel")"
+      if ! cp -Rp "$RIG_PRIMARY_PROFILE/$rel" "$CLAUDE_RIG_DIR/$rel"; then
+        echo "doctor --seed-from-primary: failed copying '$rel'" >&2
+        return 9
+      fi
+      copied=$((copied + 1))
+    fi
+  done <<< "$RIG_SEED_AUTH_PATHS"
+
+  echo "doctor --seed-from-primary: seeded $copied auth artifact(s) from the primary profile"
+  echo "  $RIG_PRIMARY_PROFILE -> $CLAUDE_RIG_DIR"
+  return 0
+}
 desktop_probe_surfaces()    { echo "doctor --probe-surfaces: not yet implemented (rr-3zb)" >&2; return 3; }
 desktop_verify_bridge()     { echo "doctor --verify-bridge: not yet implemented (rr-3zb)" >&2; return 3; }
 
