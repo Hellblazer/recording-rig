@@ -1,0 +1,23 @@
+{
+  "session": "rig-example-desktop-cowork",
+  "backend": "desktop",
+  "surface": "cowork",
+  "agent": {
+    "command": "Create a file notes.txt with three short lines about apples, then read it back and tell me what line 2 says."
+  },
+  "desktop": {
+    "checkpoints": []
+  },
+  "gates": [],
+  "validate": {
+    "must_contain": ["notes.txt"],
+    "must_not_contain": []
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 300,
+    "exit_hold_sec": 8,
+    "attach_gap_sec": 15,
+    "tmux_size": "1280x800"
+  }
+}

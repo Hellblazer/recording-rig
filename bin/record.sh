@@ -410,10 +410,22 @@ if [[ "$BACKEND" == "desktop" ]]; then
   DRIVER_PID=""
   echo "[rig] desktop: capture complete -> $MOV_OUT"
 
-  # Validate (transcript primary). Capture the verdict BEFORE branching so every
-  # desktop run lands one quality.jsonl entry (pass or fail) for soft-miss trend.
+  # Validate. The transcript validate.mjs reads depends on the provider:
+  # mcp-bridge -> the bridge transcript; agent-transcript-tail (CoWork) -> this
+  # run's audit.jsonl (resolved like the turn-end watch). Capture the verdict
+  # BEFORE branching so every desktop run lands one quality.jsonl entry.
+  VALIDATE_INPUT="$TRANSCRIPT_OUT"
+  if [[ "$PROVIDER" == "agent-transcript-tail" ]]; then
+    AUDIT_INPUT="$(coordination_transcript_path "$PROVIDER" "$LAMS_ROOT" "$COORD_BASELINE" 2>/dev/null || true)"
+    if [[ -n "$AUDIT_INPUT" ]]; then
+      VALIDATE_INPUT="$AUDIT_INPUT"
+      echo "[rig] desktop: validating against audit.jsonl -> $VALIDATE_INPUT"
+    else
+      echo "[rig] desktop: WARN — no audit.jsonl resolved; validate will report the miss" >&2
+    fi
+  fi
   VALIDATE_PASS=0
-  if node "$HERE/bin/validate.mjs" "$SPEC" "$TRANSCRIPT_OUT" "$MOV_OUT"; then
+  if node "$HERE/bin/validate.mjs" "$SPEC" "$VALIDATE_INPUT" "$MOV_OUT"; then
     VALIDATE_PASS=1
   fi
 
