@@ -130,6 +130,24 @@ coordination_wait_turn_end() {
   esac
 }
 
+# The transcript file validate.mjs should read for this provider. Empty (rc 0)
+# for mcp-bridge — record.sh validates the bridge transcript there. For
+# agent-transcript-tail: the newest post-baseline audit.jsonl (THIS run's
+# session — the same file coordination_wait_turn_end watched). rc 1 if no
+# qualifying transcript exists (the turn produced none).
+# coordination_transcript_path <provider> <root> <baseline>
+coordination_transcript_path() {
+  local provider="$1" root="${2:-}" baseline="${3:-0}"
+  case "$provider" in
+    agent-transcript-tail) _coord_newest_audit "$root" "$baseline" ;;
+    mcp-bridge) : ;; # empty -> record.sh validates the bridge transcript
+    *)
+      echo "coordination: unknown provider '$provider'" >&2
+      return 1
+      ;;
+  esac
+}
+
 # Teardown hook. Both providers poll (no background tail), so they hold no
 # resources; this is a no-op kept for contract completeness + future use.
 coordination_teardown() {

@@ -1,0 +1,27 @@
+{
+  "session": "rig-example-desktop-code",
+  "backend": "desktop",
+  "surface": "code",
+  "agent": {
+    "command": "In the current working folder, create a file named hello.txt containing the single line 'hi from code', then confirm it exists."
+  },
+  "desktop": {
+    "checkpoints": [
+      { "name": "created", "required": true }
+    ],
+    "trusted_folders": ["/tmp/rig-code-demo"]
+  },
+  "system_prompt_prologue": "Please use these tools as you work: right after you create the file, call the rig_checkpoint tool with name \"created\"; then, as your final step, call the rig_turn_end tool.",
+  "gates": [],
+  "validate": {
+    "must_contain": ["created"],
+    "must_not_contain": []
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 180,
+    "exit_hold_sec": 8,
+    "attach_gap_sec": 15,
+    "tmux_size": "1280x800"
+  }
+}

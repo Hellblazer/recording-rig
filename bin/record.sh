@@ -337,6 +337,36 @@ if [[ "$BACKEND" == "desktop" ]]; then
     fi
   fi
 
+  # Single-active-session guard (mirrors the CLI rig's tmux has-session check). A
+  # second concurrent instance collides — the driver may attach to the wrong one
+  # and stall (observed during rr-2pp.5.5 bring-up). But our OWN previous run (in
+  # a back-to-back loop) is still shutting down after its EXIT-trap SIGTERM, so
+  # WAIT for any existing main instance to quit before refusing — only a foreign
+  # or stuck instance that outlives the wait is fatal. The MAIN process carries
+  # --user-data-dir=<rig> but NOT --type= (Electron helpers do).
+  rig_main_pid() {
+    local p
+    while IFS= read -r p; do
+      [[ -n "$p" ]] || continue
+      ps -o command= -p "$p" 2>/dev/null | grep -q -- "--type=" || { printf '%s' "$p"; return 0; }
+    done < <(pgrep -f -- "--user-data-dir=$CLAUDE_RIG_DIR" 2>/dev/null || true)
+    return 1
+  }
+  RIG_QUIT_WAIT="${RIG_QUIT_WAIT:-30}"
+  _waited=0
+  while p="$(rig_main_pid || true)"; [[ -n "$p" ]]; do
+    (( _waited == 0 )) && echo "[rig] desktop: waiting for an existing Claude-Rig instance (pid $p) to quit..."
+    if (( _waited >= RIG_QUIT_WAIT )); then
+      echo "record: a Claude-Rig instance (pid $p) is still running after ${_waited}s — quit it first (⌘Q)." >&2
+      echo "        record.sh launches its own clean instance; a second one collides and the driver" >&2
+      echo "        may attach to the wrong process. (Raise RIG_QUIT_WAIT if teardown is just slow.)" >&2
+      exit 1
+    fi
+    sleep 2
+    _waited=$((_waited + 2))
+  done
+  (( _waited > 0 )) && echo "[rig] desktop: prior instance gone after ${_waited}s; launching."
+
   # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
   open -n -a Claude --args \
     --user-data-dir="$CLAUDE_RIG_DIR" \
@@ -410,10 +440,22 @@ if [[ "$BACKEND" == "desktop" ]]; then
   DRIVER_PID=""
   echo "[rig] desktop: capture complete -> $MOV_OUT"
 
-  # Validate (transcript primary). Capture the verdict BEFORE branching so every
-  # desktop run lands one quality.jsonl entry (pass or fail) for soft-miss trend.
+  # Validate. The transcript validate.mjs reads depends on the provider:
+  # mcp-bridge -> the bridge transcript; agent-transcript-tail (CoWork) -> this
+  # run's audit.jsonl (resolved like the turn-end watch). Capture the verdict
+  # BEFORE branching so every desktop run lands one quality.jsonl entry.
+  VALIDATE_INPUT="$TRANSCRIPT_OUT"
+  if [[ "$PROVIDER" == "agent-transcript-tail" ]]; then
+    AUDIT_INPUT="$(coordination_transcript_path "$PROVIDER" "$LAMS_ROOT" "$COORD_BASELINE" 2>/dev/null || true)"
+    if [[ -n "$AUDIT_INPUT" ]]; then
+      VALIDATE_INPUT="$AUDIT_INPUT"
+      echo "[rig] desktop: validating against audit.jsonl -> $VALIDATE_INPUT"
+    else
+      echo "[rig] desktop: WARN — no audit.jsonl resolved; validate will report the miss" >&2
+    fi
+  fi
   VALIDATE_PASS=0
-  if node "$HERE/bin/validate.mjs" "$SPEC" "$TRANSCRIPT_OUT" "$MOV_OUT"; then
+  if node "$HERE/bin/validate.mjs" "$SPEC" "$VALIDATE_INPUT" "$MOV_OUT"; then
     VALIDATE_PASS=1
   fi
 
