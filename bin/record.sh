@@ -337,6 +337,21 @@ if [[ "$BACKEND" == "desktop" ]]; then
     fi
   fi
 
+  # Single-active-session guard (mirrors the CLI rig's tmux has-session check):
+  # refuse if a Claude-Rig main instance is ALREADY running. A second `open -n`
+  # collides — the driver may attach to the wrong instance and stall mid-run
+  # (observed during rr-2pp.5.5 live bring-up). The MAIN process carries
+  # --user-data-dir=<rig> but NOT --type= (Electron helpers do).
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    if ! ps -o command= -p "$p" 2>/dev/null | grep -q -- "--type="; then
+      echo "record: a Claude-Rig instance is already running (pid $p) — quit it first." >&2
+      echo "        record.sh launches its own clean instance; a second one collides and the" >&2
+      echo "        driver may attach to the wrong process. Quit Claude-Rig (⌘Q) and re-run." >&2
+      exit 1
+    fi
+  done < <(pgrep -f -- "--user-data-dir=$CLAUDE_RIG_DIR" 2>/dev/null || true)
+
   # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
   open -n -a Claude --args \
     --user-data-dir="$CLAUDE_RIG_DIR" \
