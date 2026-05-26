@@ -67,11 +67,16 @@ Validation runs against the **transcript JSONL**, not a cast.
    probe cache freshness:
 
    ```bash
-   source "${CLAUDE_PLUGIN_ROOT}/lib/desktop-doctor.sh"
-   _desktop_cache_fresh "$RIG_PROBE_CACHE" 30 && echo FRESH || echo "STALE_OR_ABSENT: $RIG_PROBE_CACHE"
+   [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] || { echo "ENV_ERROR: CLAUDE_PLUGIN_ROOT is not set"; }
+   source "${CLAUDE_PLUGIN_ROOT}/lib/desktop-doctor.sh" \
+     && _desktop_cache_fresh "$RIG_PROBE_CACHE" 30 \
+     && echo FRESH || echo "STALE_OR_ABSENT: ${RIG_PROBE_CACHE:-<unset: source failed?>}"
    ```
 
-   If it is **not** `FRESH`, **STOP — do not author a Desktop spec.** Tell the user:
+   If you see `ENV_ERROR` (or the path in `STALE_OR_ABSENT` is empty), the skill
+   environment is misconfigured — that is a *different* problem from a stale cache;
+   surface the env error rather than telling the user to run `--probe-surfaces`.
+   Otherwise, if it is **not** `FRESH`, **STOP — do not author a Desktop spec.** Tell the user:
 
    > The Desktop surface probe cache is stale or absent. Launch Claude-Rig, then run
    > `"${CLAUDE_PLUGIN_ROOT}/bin/doctor.sh" --probe-surfaces` (it validates the live
