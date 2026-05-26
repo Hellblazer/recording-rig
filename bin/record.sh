@@ -337,20 +337,35 @@ if [[ "$BACKEND" == "desktop" ]]; then
     fi
   fi
 
-  # Single-active-session guard (mirrors the CLI rig's tmux has-session check):
-  # refuse if a Claude-Rig main instance is ALREADY running. A second `open -n`
-  # collides — the driver may attach to the wrong instance and stall mid-run
-  # (observed during rr-2pp.5.5 live bring-up). The MAIN process carries
+  # Single-active-session guard (mirrors the CLI rig's tmux has-session check). A
+  # second concurrent instance collides — the driver may attach to the wrong one
+  # and stall (observed during rr-2pp.5.5 bring-up). But our OWN previous run (in
+  # a back-to-back loop) is still shutting down after its EXIT-trap SIGTERM, so
+  # WAIT for any existing main instance to quit before refusing — only a foreign
+  # or stuck instance that outlives the wait is fatal. The MAIN process carries
   # --user-data-dir=<rig> but NOT --type= (Electron helpers do).
-  while IFS= read -r p; do
-    [[ -n "$p" ]] || continue
-    if ! ps -o command= -p "$p" 2>/dev/null | grep -q -- "--type="; then
-      echo "record: a Claude-Rig instance is already running (pid $p) — quit it first." >&2
-      echo "        record.sh launches its own clean instance; a second one collides and the" >&2
-      echo "        driver may attach to the wrong process. Quit Claude-Rig (⌘Q) and re-run." >&2
+  rig_main_pid() {
+    local p
+    while IFS= read -r p; do
+      [[ -n "$p" ]] || continue
+      ps -o command= -p "$p" 2>/dev/null | grep -q -- "--type=" || { printf '%s' "$p"; return 0; }
+    done < <(pgrep -f -- "--user-data-dir=$CLAUDE_RIG_DIR" 2>/dev/null || true)
+    return 1
+  }
+  RIG_QUIT_WAIT="${RIG_QUIT_WAIT:-30}"
+  _waited=0
+  while p="$(rig_main_pid || true)"; [[ -n "$p" ]]; do
+    (( _waited == 0 )) && echo "[rig] desktop: waiting for an existing Claude-Rig instance (pid $p) to quit..." >&2
+    if (( _waited >= RIG_QUIT_WAIT )); then
+      echo "record: a Claude-Rig instance (pid $p) is still running after ${_waited}s — quit it first (⌘Q)." >&2
+      echo "        record.sh launches its own clean instance; a second one collides and the driver" >&2
+      echo "        may attach to the wrong process. (Raise RIG_QUIT_WAIT if teardown is just slow.)" >&2
       exit 1
     fi
-  done < <(pgrep -f -- "--user-data-dir=$CLAUDE_RIG_DIR" 2>/dev/null || true)
+    sleep 2
+    _waited=$((_waited + 2))
+  done
+  (( _waited > 0 )) && echo "[rig] desktop: prior instance gone after ${_waited}s; launching." >&2
 
   # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
   open -n -a Claude --args \
