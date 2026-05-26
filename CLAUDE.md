@@ -25,7 +25,7 @@ Plugin-mode equivalents (when installed via marketplace):
 
 Env knobs: `SKIP_VALIDATE=1` (override validator refusal for known-good cases), `SKIP_CONSENT_SWEEP=1` (skip the auxiliary tmux session that dismisses claude's first-run consent dialogs), `AGG_IDLE_TIME_LIMIT`, `GATE_PRE_ENTER_SEC` (default 5), `GATE_POST_ENTER_SEC` (default 2).
 
-There is no project test suite yet. CI runs `.github/workflows/version-parity.yml` on tag push (and on PRs touching `plugin.json`) to enforce manifest/tag parity.
+There is no project test suite yet. CI runs `.github/workflows/version-parity.yml` on tag push (and on PRs touching `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`) to enforce manifest/tag parity.
 
 ## Architecture
 
@@ -50,18 +50,18 @@ These are load-bearing knowledge that took real time to discover. Full context i
 Hand-cut, tag-triggered, ref-pinned. Full procedure in `docs/RELEASE.md`. Standing rules (apply on every release):
 
 1. **Releases are hand-cut.** Tag push triggers parity validation; merges to main do not publish.
-2. **`.claude-plugin/plugin.json` `version` is canonical** for this repo. Every release bumps it in lockstep with the tag.
+2. **`.claude-plugin/plugin.json` `version` is canonical** for this repo. Every release bumps it in lockstep with the tag — **and** with the self-hosted `.claude-plugin/marketplace.json` (the `recording-rig` plugin entry's `version` and `source.ref`). All three move together.
 3. **Tags are annotated, not lightweight**: `git tag -a v<X.Y.Z> -m "<summary>"`.
-4. **Consuming marketplaces pin `source.ref` to immutable release tags only.** Optional `sha` pin for belt-and-suspenders.
+4. **recording-rig self-hosts its marketplace** (`.claude-plugin/marketplace.json`, like nexus). The plugin entry's `source` is the whole-repo `"git"` form pinned to an immutable release tag (`ref: "v<X.Y.Z>"`); `git-subdir` is for monorepos, not this single-plugin repo. Optional `sha` pin for belt-and-suspenders.
 5. **One channel.** No `-rc`, `-canary`, `-dev` variants until proven necessary.
 6. **Releaser is human.** AI prepares PRs; human merges and tags.
-7. **Parity stays strict.** `.github/workflows/version-parity.yml` fails any tag whose `plugin.json` version doesn't match, and any PR that breaks manifest well-formedness.
+7. **Parity stays strict.** `.github/workflows/version-parity.yml` fails any tag whose `plugin.json` version, `marketplace.json` entry version, or `marketplace.json` `source.ref` disagree with it, and any PR that breaks either manifest's well-formedness or the marketplace↔plugin.json version match.
 8. **`CHANGELOG.md` entry lands with the version bump PR**, not after the tag.
 
 ## Reference
 
 - `docs/design.md` — full design rationale, sentinel contract, hook-matcher semantics, ruled-out approaches.
-- `docs/RELEASE.md` — release procedure, consuming-marketplace source shape, scope of in-repo parity check.
+- `docs/RELEASE.md` — release procedure, self-hosted `marketplace.json` + `source` shape, scope of the parity check, install instructions.
 - `CHANGELOG.md` — version history.
 - `examples/single-pane.json`, `examples/two-pane.json`, `examples/gated.json` — minimal spec templates.
 - `test-runs/tutorial-*.json` — specs that produce the README GIFs (canonical examples of the spec format).
