@@ -61,7 +61,9 @@ Hand-cut, tag-triggered, ref-pinned. Full procedure in `docs/RELEASE.md`. Standi
 ## Reference
 
 - `docs/design.md` — full design rationale, sentinel contract, hook-matcher semantics, ruled-out approaches.
-- `docs/RELEASE.md` — release procedure, self-hosted `marketplace.json` + `source` shape, scope of the parity check, install instructions.
+- `CONTRIBUTING.md` — dev setup, test discipline, PR rules, and the release protocol (summary + standing rules).
+- `docs/RELEASE.md` — detailed release procedure, self-hosted `marketplace.json` + `source` shape, scope of the parity check, install instructions.
+- `.claude/skills/release/` — repo-maintainer skill that preps a release (branch + lockstep bump + CHANGELOG + deterministic gate + PR), then stops for the human. Not shipped with the plugin.
 - `CHANGELOG.md` — version history.
 - `examples/single-pane.json`, `examples/two-pane.json`, `examples/gated.json` — minimal spec templates.
 - `test-runs/tutorial-*.json` — specs that produce the README GIFs (canonical examples of the spec format).
