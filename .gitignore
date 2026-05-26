@@ -20,3 +20,4 @@ node_modules/
 desktop-driver/.build/
 /bin/desktop-driver
 /bin/ax-dump
+/bin/perms-check
