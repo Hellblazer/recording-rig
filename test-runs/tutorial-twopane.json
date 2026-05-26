@@ -1,7 +1,7 @@
 {
   "session": "tutorial-twopane",
   "agent": {
-    "command": "We are recording a screencast of a two-pane workflow. You MUST invoke the Bash tool (the recording fails without it). Use Bash to run exactly: bash -c 'printf \"Dispatching job to worker pool...\\n\"; printf \"JOB_ID=deploy-job-7K2Q\\n\"'. After the Bash tool returns, reply with exactly one line: AGT-DISPATCHED-P9F. Do not skip the Bash call. Do not run any other tool.",
+    "command": "We are recording a screencast of a two-pane workflow: an agent dispatches a job and a companion process watches it by ID. You MUST use the Bash tool to dispatch the job — do NOT type the job id yourself. A hook captures the Bash tool's stdout and a watcher keys off it, and the job id is generated at RUNTIME, so you cannot know it without actually running the command. Use the Bash tool to run exactly: bash -c 'printf \"Dispatching job to worker pool...\\n\"; printf \"JOB_ID=deploy-job-%s\\n\" \"$RANDOM\"'. After the Bash tool returns, reply with exactly one line: AGT-DISPATCHED-P9F. Do not skip the Bash call. Do not run any other tool.",
     "cwd": "/tmp",
     "bypass_permissions": true,
     "extra_args": ["--model", "sonnet"]
@@ -24,10 +24,10 @@
   },
   "validate": {
     "must_contain_in_order": [
-      "[observer] watching JOB_ID=deploy-job-7K2Q",
-      "[observer] tick 1 for deploy-job-7K2Q",
-      "[observer] tick 2 for deploy-job-7K2Q",
-      "[observer] job complete: deploy-job-7K2Q"
+      "[observer] watching JOB_ID=deploy-job-",
+      "[observer] tick 1 for deploy-job-",
+      "[observer] tick 2 for deploy-job-",
+      "[observer] job complete: deploy-job-"
     ],
     "must_not_contain": ["<unset>"]
   },
