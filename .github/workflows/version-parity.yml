@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - '.claude-plugin/plugin.json'
+      - '.claude-plugin/marketplace.json'
       - '.github/workflows/version-parity.yml'
 
 jobs:
@@ -34,3 +35,46 @@ jobs:
             exit 1
           fi
           echo "OK: plugin.json version $actual matches tag $tag"
+
+      - name: Assert marketplace.json well-formed + entry matches plugin.json (always)
+        run: |
+          set -euo pipefail
+          mp=.claude-plugin/marketplace.json
+          # Valid JSON with exactly the 'recording-rig' plugin entry present.
+          entry="$(jq -c '.plugins[] | select(.name=="recording-rig")' "$mp")"
+          [ -n "$entry" ] || { echo "::error file=$mp::no 'recording-rig' plugin entry"; exit 1; }
+          # Entry shape: semver version + git whole-repo source pinned to a v-tag ref.
+          echo "$entry" | jq -e '
+            (.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+(-[A-Za-z0-9.-]+)?$"))
+            and (.source.source == "git")
+            and (.source.url | type == "string")
+            and (.source.ref  | test("^v[0-9]+\\.[0-9]+\\.[0-9]+(-[A-Za-z0-9.-]+)?$"))
+          ' > /dev/null || { echo "::error file=$mp::recording-rig entry malformed (version/source.source/source.url/source.ref)"; exit 1; }
+          # Marketplace entry version must track plugin.json (the canonical version).
+          mv="$(echo "$entry" | jq -r .version)"
+          pj="$(jq -r .version .claude-plugin/plugin.json)"
+          if [ "$mv" != "$pj" ]; then
+            echo "::error file=$mp::marketplace entry version ($mv) does not match plugin.json ($pj)"
+            exit 1
+          fi
+          echo "OK: marketplace.json well-formed; recording-rig entry version $mv matches plugin.json"
+
+      - name: Assert marketplace entry version + source.ref match tag (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          mp=.claude-plugin/marketplace.json
+          tag="${GITHUB_REF_NAME}"
+          expected="${tag#v}"
+          entry="$(jq -c '.plugins[] | select(.name=="recording-rig")' "$mp")"
+          mv="$(echo "$entry" | jq -r .version)"
+          ref="$(echo "$entry" | jq -r .source.ref)"
+          if [ "$mv" != "$expected" ]; then
+            echo "::error file=$mp::marketplace entry version ($mv) does not match tag ($tag)"
+            exit 1
+          fi
+          if [ "$ref" != "$tag" ]; then
+            echo "::error file=$mp::marketplace source.ref ($ref) does not match tag ($tag)"
+            exit 1
+          fi
+          echo "OK: marketplace entry version $mv and source.ref $ref match tag $tag"

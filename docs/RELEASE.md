@@ -1,77 +1,93 @@
 # Release procedure
 
-recording-rig is published as a Claude Code plugin. Installs and updates resolve
-through whichever marketplace registers it (e.g. `Hellblazer/nexus`'s
-`marketplace.json`). To decouple installed versions from `main` HEAD, the
-marketplace entry pins to a tag rather than tracking the branch — pushes to
-`main` between releases do not change what installed users see.
+recording-rig is published as a Claude Code plugin **through its own marketplace**:
+`.claude-plugin/marketplace.json` in this repo registers the `recording-rig` plugin
+and pins its `source.ref` to an immutable release tag. Installs and updates resolve
+through that entry. Because the entry pins to a tag rather than tracking the branch,
+pushes to `main` between releases do **not** change what installed users see — only
+cutting a new tag (and bumping the manifests to match) does.
 
-## Bump and tag (this repo)
+This mirrors the pinned-source model used by `Hellblazer/nexus` (which self-hosts its
+own `marketplace.json` for `conexus`/`sn`). recording-rig is its own single-plugin repo
+— the plugin lives at the repo root — so its `source` uses the whole-repo `"git"` form,
+not `"git-subdir"`.
 
-1. Branch off `main`: `git checkout -b release/v0.1.2`.
-2. Bump `.claude-plugin/plugin.json` `version` to the next semver — e.g. `0.1.2`.
-3. Add a `## [0.1.2] — YYYY-MM-DD` entry to `CHANGELOG.md` covering user-visible changes since the last release.
-4. Commit, push, open a PR:
+## Install (users)
+
+```text
+/plugin marketplace add Hellblazer/recording-rig
+/plugin install recording-rig@recording-rig
+```
+
+The marketplace and the plugin share the name `recording-rig` (single-plugin repo).
+Installed versions follow the pinned tag; run `/plugin marketplace update recording-rig`
+after a new release to pick it up.
+
+## Bump and tag (releasing `v<X.Y.Z>`)
+
+All three of these move in **lockstep** — the `version-parity` workflow fails a tag whose
+manifests disagree with it:
+
+1. Branch off `main`: `git checkout -b release/v<X.Y.Z>`.
+2. Bump **`.claude-plugin/plugin.json`** `version` → `<X.Y.Z>` (the canonical version for this repo).
+3. Bump **`.claude-plugin/marketplace.json`** — the `recording-rig` plugin entry's
+   `version` → `<X.Y.Z>` **and** its `source.ref` → `v<X.Y.Z>`, together.
+4. Add a `## [<X.Y.Z>] — YYYY-MM-DD` entry to `CHANGELOG.md` covering user-visible changes since the last release.
+5. Commit, push, open a PR:
    ```bash
-   git commit -am "release: v0.1.2"
-   git push -u origin release/v0.1.2
-   gh pr create --title "release: v0.1.2"
+   git commit -am "release: v<X.Y.Z>"
+   git push -u origin release/v<X.Y.Z>
+   gh pr create --title "release: v<X.Y.Z>"
    ```
-5. Merge the PR. On main:
+6. Merge the PR. On main:
    ```bash
    git checkout main && git pull
-   git tag -a v0.1.2 -m "release: v0.1.2"
-   git push origin v0.1.2
+   git tag -a v<X.Y.Z> -m "release: v<X.Y.Z>"
+   git push origin v<X.Y.Z>
    ```
-6. Watch the workflow: `gh run watch $(gh run list --workflow=version-parity.yml --limit=1 --json databaseId -q '.[0].databaseId')`.
+7. Watch the workflow: `gh run watch $(gh run list --workflow=version-parity.yml --limit=1 --json databaseId -q '.[0].databaseId')`.
 
-Tags are **annotated** (`git tag -a -m`), not lightweight — they carry author,
-date, and a release message that show up in `git log` and on the GitHub release
-page. Lightweight tags (bare `git tag v0.1.2`) skip all of that and can't be
-signed.
+Tags are **annotated** (`git tag -a -m`), not lightweight — they carry author, date, and a
+release message that show up in `git log` and on the GitHub release page. Lightweight tags
+(bare `git tag v<X.Y.Z>`) skip all of that and can't be signed.
 
-The `version-parity` workflow runs:
-- On every PR touching `.claude-plugin/plugin.json` → asserts the manifest is well-formed JSON with a semver-shaped `version`.
-- On push to `main` → same well-formedness check.
-- On `v*` tag push → additionally asserts `plugin.json` `version` matches the tag (minus the `v` prefix).
+Bad tags can be re-cut after fixing the manifests
+(`git tag -d v<X.Y.Z> && git push origin :v<X.Y.Z>`, then start over from step 1 on a new
+release branch).
 
-Bad tags can be re-cut after fixing `plugin.json` (`git tag -d v0.1.2 && git push origin :v0.1.2`, then start over from step 1 on a new release branch).
-
-## Update the marketplace entry (consuming repo)
-
-In the consuming marketplace's `marketplace.json`, set the recording-rig entry's
-`version` and `source.ref` together:
+## The `source` object
 
 ```jsonc
-{
-  "name": "recording-rig",
-  "version": "0.1.2",
-  "source": {
-    "source": "git",
-    "url": "https://github.com/Hellblazer/recording-rig.git",
-    "ref": "v0.1.2"
-  }
+"source": {
+  "source": "git",
+  "url": "https://github.com/Hellblazer/recording-rig.git",
+  "ref": "v<X.Y.Z>"
 }
 ```
 
-Notes on the `source` object:
-
 - Use the object form, not a relative path like `"./recording-rig"`.
-- Use `"git"` (whole repo). `"git-subdir"` is for plugins that live as a
-  subdirectory of a monorepo; recording-rig is its own repo.
-- Tags are mutable. For belt-and-suspenders immutability, also pin the commit:
+- Use `"git"` (whole repo). `"git-subdir"` is for plugins that live as a subdirectory of a
+  monorepo (e.g. nexus's `conexus`/`sn`); recording-rig is its own repo.
+- `ref` only ever points at an immutable release tag — never a branch, never a rolling tag.
+- Tags are mutable. For belt-and-suspenders immutability, also pin the commit `sha`:
   ```jsonc
   "source": {
     "source": "git",
     "url": "https://github.com/Hellblazer/recording-rig.git",
-    "ref": "v0.1.2",
+    "ref": "v<X.Y.Z>",
     "sha": "<40-char commit sha>"
   }
   ```
 
-## Scope of the in-repo parity check
+## What the parity workflow enforces
 
-`.github/workflows/version-parity.yml` only verifies `plugin.json` `version`
-against the git tag at push time. It cannot verify the marketplace entry on the
-consuming side — that parity (marketplace `version` ↔ `source.ref` ↔ this
-repo's tag) belongs to the marketplace repo's own CI.
+`.github/workflows/version-parity.yml` runs on every PR touching either manifest (or the
+workflow), on push to `main`, and on `v*` tag push:
+
+- **Always** — `plugin.json` is well-formed JSON with a semver `version`; `marketplace.json`
+  is well-formed, carries the `recording-rig` plugin entry with a semver `version` and a
+  `git` `source` whose `ref` is a `v`-tag, and the entry `version` **equals** `plugin.json`'s.
+- **On a `v*` tag push** — additionally, `plugin.json` `version`, the marketplace entry
+  `version`, and the marketplace `source.ref` all match the tag (`source.ref == tag`,
+  the versions == tag minus the `v`). A tag whose manifests still point at the previous
+  release fails here — that is the gate forcing step 3 before the tag.
