@@ -67,6 +67,30 @@ coordination_supports_gates() {
   esac
 }
 
+# Spec preflight (rr-2pp.5.4): reject a spec that declares interactive gates or
+# required checkpoints on a surface whose provider cannot carry them. A
+# gate-incapable (fallback) provider has no rig.ask reaching the surface, and —
+# until validate.mjs reads audit.jsonl (rr-2pp.5.5) — no transcript-asserted
+# checkpoints either. rc 0 = ok; rc 1 = rejected (advisory on stderr). Gate-
+# capable providers (mcp-bridge) pass through untouched.
+coordination_preflight_gates() {
+  local provider="$1" spec="$2" ngates nreq
+  coordination_supports_gates "$provider" 2>/dev/null && return 0
+  ngates="$(jq -r '(.gates // []) | length' "$spec" 2>/dev/null || echo 0)"
+  nreq="$(jq -r '[ (.desktop.checkpoints // [])[] | select(.required == true) ] | length' "$spec" 2>/dev/null || echo 0)"
+  [[ "$ngates" =~ ^[0-9]+$ ]] || ngates=0
+  [[ "$nreq" =~ ^[0-9]+$ ]] || nreq=0
+  if (( ngates > 0 )); then
+    echo "record: spec declares ${ngates} gate(s), but this surface uses the '$provider' fallback provider — rig.ask does not reach it, so interactive gates are unsupported. Remove gates[] or record this flow on the Chat/Code surface." >&2
+    return 1
+  fi
+  if (( nreq > 0 )); then
+    echo "record: spec declares ${nreq} required checkpoint(s), but this surface uses the '$provider' fallback provider — checkpoints are not transcript-asserted here yet (planned via audit.jsonl in rr-2pp.5.5). Set required:false or use the Chat/Code surface." >&2
+    return 1
+  fi
+  return 0
+}
+
 # Pre-paste setup. For agent-transcript-tail this prints a BASELINE epoch: only
 # an audit.jsonl modified at/after submit is a candidate, so a completed prior
 # run's stale {"type":"result"} cannot be mistaken for this turn's end. Callers
