@@ -226,6 +226,12 @@ Desktop-specific behavior:
   completes (synthesized fallback + GIF) and is recorded in
   `~/Library/Application Support/recording-rig/quality.jsonl`. `bin/doctor.sh` warns when the
   soft-miss rate exceeds 20% over the last 20 desktop runs (instruction drift).
+- **No competing Claude.app** (`rr-re6`): recording requires that no *other* Claude.app instance is
+  running. macOS activates per app-bundle, so a second instance keeps the foreground when
+  `open -n -a Claude` launches the `Claude-Rig` instance — the Rig window stays backgrounded and its
+  accessibility tree never materializes (the driver then times out). `record.sh` refuses while a
+  non-Rig Claude.app main is running; `doctor` warns. Quit your primary Claude.app before recording,
+  or set `RIG_ALLOW_COMPETING_CLAUDE=1` to override.
 - **`gates[]`** work as in CLI, answered via the bridge's `rig_ask`.
 - **Diagnose**: `/recording-rig:diagnose <session> [spec]` runs `bin/diagnose-desktop.sh` —
   checkpoint coverage, soft-miss trend, capture coverage, and bridge-log liveness.

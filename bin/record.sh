@@ -2,7 +2,7 @@
 # Top-level entry point. Read a spec, drive a recording, validate, render GIF.
 # Usage: record.sh <spec.json>
 # Env overrides: SESSION, CAST_OUT, GIF_OUT, SKIP_VALIDATE, SKIP_GIF,
-#                ATTACH_GAP_SEC, SKIP_CONSENT_SWEEP
+#                ATTACH_GAP_SEC, SKIP_CONSENT_SWEEP, RIG_ALLOW_COMPETING_CLAUDE
 set -euo pipefail
 
 SPEC_ARG="${1:?usage: record.sh <spec.json>}"
@@ -16,6 +16,8 @@ source "$HERE/lib/quality.sh"
 source "$HERE/lib/coordination.sh"
 # shellcheck disable=SC1091
 source "$HERE/lib/trusted-folders.sh"
+# shellcheck disable=SC1091
+source "$HERE/lib/competing-claude.sh"
 
 # Dedicated tmux socket per session so the rig:
 # (a) doesn't pollute the user's normal tmux server,
@@ -334,6 +336,25 @@ if [[ "$BACKEND" == "desktop" ]]; then
       echo "[rig] desktop: pre-seeded ${#TRUSTED_FOLDERS[@]} trusted folder(s) into config.json"
     else
       echo "record: warning — trusted-folder pre-seed failed (Code may prompt mid-recording)" >&2
+    fi
+  fi
+
+  # Competing-instance guard (rr-re6): refuse if a NON-Rig Claude.app instance is
+  # running. macOS activates per bundle, so a second Claude.app instance keeps the
+  # foreground when `open -n -a Claude` launches the Rig instance below — the Rig
+  # window stays backgrounded, its Chromium accessibility tree never materializes,
+  # and the driver's armWait times out. (Confirmed by Test A: zero competing mains
+  # => hands-free.) The user's primary holds live work, so we REFUSE, never quit
+  # it. Override with RIG_ALLOW_COMPETING_CLAUDE=1 (expert/escape hatch).
+  if [[ "${RIG_ALLOW_COMPETING_CLAUDE:-}" != "1" ]]; then
+    mapfile -t _COMPETING_CLAUDE < <(ps -axo pid=,command= | competing_claude_pids "$CLAUDE_RIG_DIR")
+    if (( ${#_COMPETING_CLAUDE[@]} > 0 )); then
+      echo "record: a competing Claude.app instance is running (pid(s): ${_COMPETING_CLAUDE[*]}) — quit it first (⌘Q)." >&2
+      echo "        A second Claude.app bundle instance keeps macOS foreground, so the Claude-Rig" >&2
+      echo "        instance record.sh launches stays backgrounded and its accessibility tree never" >&2
+      echo "        loads (the desktop driver then times out). Quit your other Claude.app and re-run," >&2
+      echo "        or set RIG_ALLOW_COMPETING_CLAUDE=1 to override." >&2
+      exit 1
     fi
   fi
 
