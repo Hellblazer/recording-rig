@@ -28,6 +28,16 @@ final class AXDriver: AXDriving {
         AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
+    // Foreground the Rig app via the AX layer (rr-re6). A backgrounded Electron
+    // window collapses its Chromium a11y tree (armWait times out) and renders
+    // nothing (ScreenCaptureKit captures black). Setting the application element's
+    // AXFrontmost attribute uses the same Accessibility grant the rest of the
+    // drive relies on — unlike a .accessory process's NSRunningApplication
+    // .activate(), which macOS restricts for a non-active caller.
+    func bringToFront() {
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    }
+
     func find(role: String, description: String) -> AXUIElement? {
         search(from: app, role: role, description: description, depth: 0)
     }
