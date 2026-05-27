@@ -294,10 +294,19 @@ The bridge and the Code working folder are **not** scriptable end-to-end; do the
   **enabled** in the `Claude-Rig` profile's Connectors UI. An installed-but-disabled bridge looks
   exactly like the lazy-load miss — the model makes **no** `rig_*` calls and the run fails with an
   empty transcript. (Needed for Chat/Code; CoWork doesn't use the bridge.)
-- **Select the Code working folder once.** The Code surface needs a working folder chosen in its
-  native "Open folder…" panel, which is **not** AX-drivable. The choice persists in the profile, so
-  it's a one-time step. `desktop.trusted_folders` only pre-seeds *trust* (it writes
-  `localAgentModeTrustedFolders` in the profile `config.json`); it does **not** select the folder.
+- **Select the Code _and_ CoWork working folder once.** Both local-agent-mode surfaces (Code and
+  CoWork) need a working folder chosen in their native "Open folder…" panel, which is **not**
+  AX-drivable — without it the surface hangs waiting for one mid-recording. The choice persists in
+  the profile, so it's a one-time step per surface. `desktop.trusted_folders` only pre-seeds *trust*
+  (it writes `localAgentModeTrustedFolders` in the profile `config.json`); it does **not** select
+  the folder. For a multi-surface spec that touches a shared path (e.g. `examples/desktop-tiers.json`),
+  point both surfaces at the same folder.
+
+**Stage Manager is handled automatically.** macOS Stage Manager repositions/animates windows on
+focus changes, which corrupts a multi-surface capture (ScreenCaptureKit follows the shrinking
+window). `record.sh` detects it, disables it for the recording, and restores it on exit (including
+on interrupt). Set `SKIP_STAGE_MANAGER_TOGGLE=1` to opt out (e.g. you've already excluded Claude-Rig
+in your window manager).
 
 ## Architecture
 
