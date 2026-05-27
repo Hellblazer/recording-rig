@@ -76,6 +76,20 @@ func armWait(role: String, description: String, timeout: Double = 30, poll: Doub
     }
 }
 
+// Like armWait, but resolves the composer among ALL role+description matches via
+// findComposer (prefers the focused / on-screen one). Used at compose time so a
+// transient composer left mid-surface-transition is not the one we drive (rr-bw3).
+func armWaitComposer(role: String, description: String, timeout: Double = 30, poll: Double = 0.5) -> AXDriver.Element {
+    do {
+        return try waiter.wait(label: "composer \(role):\(description)", timeout: timeout, poll: poll,
+                               rearm: { ax.armManualAccessibility() }) {
+            ax.findComposer(role: role, description: description)
+        }
+    } catch {
+        fail("\(error)")
+    }
+}
+
 do {
     // 0. Foreground the Rig instance (rr-re6) — once, before driving. A backgrounded
     //    Electron window collapses its Chromium a11y tree (armWait then times out)
@@ -109,8 +123,19 @@ do {
         guard ax.press(navButton) else { fail("AXPress failed on \(step.surface) nav button (step \(k))") }
 
         let prompt = step.systemPromptPrologue.map { "\($0)\n\n\(step.command)" } ?? step.command
-        let composer = armWait(role: sel.composer.role, description: sel.composer.axDescription)
+
+        // Settle after the surface switch — the SPA re-renders asynchronously, so a
+        // composer resolved instantly can be transient (rr-bw3). armWaitComposer
+        // prefers the focused / on-screen composer among ALL matches, so we drive the
+        // visible one, not a stale/transient node left from the previous surface.
+        Thread.sleep(forTimeInterval: 0.6)
+        let composer = armWaitComposer(role: sel.composer.role, description: sel.composer.axDescription)
         guard ax.setValue(composer, prompt) else { fail("AXValue set failed on composer (step \(k))") }
+        // We deliberately do NOT gate on a kAXValue read-back: these are contenteditable
+        // editors whose kAXValue does not reflect a programmatic set, so an exact
+        // read-back fails even on surfaces that submit fine (e.g. Code). Log the
+        // read-back length only, as a diagnostic for future investigation (rr-bw3).
+        log("step \(k) (\(step.surface)) composed (read-back chars=\(ax.value(composer)?.count ?? -1))")
 
         // Start capture before the FIRST submit (writer session begins on the first
         // frame's PTS, ahead of the first model output); later steps share it.
