@@ -123,9 +123,15 @@ else
     echo "record: gates[].for_command references unknown command(s): $bad_fc" >&2; exit 2; }
 fi
 
-# Preflight: spec sanity.
-if ! jq -e '(.agent.command // (.agent.commands // [])[0]) | strings | length > 0' "$SPEC" >/dev/null; then
-  echo "record: spec must define agent.command (string) or agent.commands (non-empty array)" >&2
+# Preflight: spec sanity — either a single-surface command(s) OR a multi-surface
+# steps[] (rr-u07), each step carrying a non-empty command (matches SpecReader).
+if ! jq -e '
+  def has_cmd: (. // "") | (type == "string") and (length > 0);
+  ((.agent.command // (.agent.commands // [])[0]) | has_cmd)
+  or (((.steps | type) == "array") and ((.steps | length) > 0)
+      and ((.steps | map(.command | has_cmd) | all)))
+' "$SPEC" >/dev/null; then
+  echo "record: spec must define agent.command / agent.commands, or a non-empty steps[] (each with a command)" >&2
   exit 2
 fi
 
@@ -337,10 +343,8 @@ if [[ "$BACKEND" == "desktop" ]]; then
   SURFACE=$(IFS=+; echo "${STEP_SURFACES[*]}")   # display / quality-log (e.g. code+chat+cowork)
 
   # Resolve each step's provider; track whether ANY step uses the bridge (its
-  # transcript is then the validate target). Pessimistic-case preflight (rr-2pp.5.4),
-  # now per step: a fallback-provider surface (CoWork) carries no rig.ask and no
-  # transcript-asserted required checkpoints, so a spec putting gates[]/required
-  # checkpoints on such a surface is rejected BEFORE launch.
+  # transcript is then the validate target — it carries the spec's gates[] and
+  # required checkpoints, produced by the bridge steps).
   USED_BRIDGE=0
   declare -a STEP_PROVIDERS=()
   for _sfc in "${STEP_SURFACES[@]}"; do
@@ -348,9 +352,16 @@ if [[ "$BACKEND" == "desktop" ]]; then
       || { echo "record: could not resolve coordination provider for surface '$_sfc'" >&2; exit 1; }
     STEP_PROVIDERS+=("$_prov")
     [[ "$_prov" == "mcp-bridge" ]] && USED_BRIDGE=1
-    coordination_preflight_gates "$_prov" "$SPEC" || exit 2
   done
-  echo "[rig] desktop: steps=${#STEP_SURFACES[@]} surfaces=$SURFACE"
+
+  # Pessimistic-case preflight (rr-2pp.5.4), generalized to multi-surface: gates[]
+  # and required checkpoints are carried by the bridge + its transcript, so a run
+  # with ANY bridge step can carry them. Only a recording whose every step uses a
+  # fallback provider (no bridge at all) cannot — reject such a spec BEFORE launch.
+  if (( USED_BRIDGE == 0 )); then
+    coordination_preflight_gates "agent-transcript-tail" "$SPEC" || exit 2
+  fi
+  echo "[rig] desktop: steps=${#STEP_SURFACES[@]} surfaces=$SURFACE used_bridge=$USED_BRIDGE"
 
   # Code-surface trusted-folder pre-seeding (rr-2pp.5.3): merge the spec's
   # desktop.trusted_folders into the profile config so local-agent-mode does not
@@ -476,6 +487,12 @@ if [[ "$BACKEND" == "desktop" ]]; then
     [[ -e "$(sentinel_path "step-${_k}-submitted")" ]] || break  # gave up -> stop coordinating
 
     _provider="${STEP_PROVIDERS[$_k]}"
+    # Consecutive bridge steps SHARE the turn-end sentinel — clear it now (after this
+    # step's submit) so the idle-watch waits for THIS step's fresh rig_turn_end, not
+    # the previous bridge step's stale one (whose old mtime reads as already-idle and
+    # returns immediately, skipping the turn). The transcript is NOT cleared, so every
+    # step's checkpoints accumulate for validation. (rr-u07 multi-bridge-step fix.)
+    [[ "$_provider" == "mcp-bridge" ]] && rm -f "$(sentinel_path turn-end)"
     # Baseline AFTER this step's submit: only an audit.jsonl modified at/after now
     # is this step's turn-end candidate (agent-transcript-tail). Empty for mcp-bridge.
     STEP_BASELINE=$(coordination_ready "$_provider")
