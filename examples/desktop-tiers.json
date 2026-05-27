@@ -1,0 +1,39 @@
+{
+  "session": "rig-example-desktop-tiers",
+  "backend": "desktop",
+  "steps": [
+    {
+      "surface": "code",
+      "system_prompt_prologue": "First, load the Recording Rig Bridge tools (rig_checkpoint, rig_turn_end) so they are available. Do the task below; immediately after the file exists call the rig_checkpoint tool with name \"wrote-shared\"; and as your final step call the rig_turn_end tool.",
+      "command": "Create the file /tmp/rig-tiers-demo/shared-fact.txt containing the single line 'meeting at 0900', then confirm it exists. In one sentence, note that this is a host-filesystem fact (it lives on disk). Then state one session-only thought you will deliberately NOT write to any file — a scratch note that exists only in this Code session."
+    },
+    {
+      "surface": "chat",
+      "system_prompt_prologue": "First, load the Recording Rig Bridge tools (rig_checkpoint, rig_turn_end) so they are available. Answer the request below; right before finishing call the rig_checkpoint tool with name \"narrated\"; and as your final step call the rig_turn_end tool.",
+      "command": "In two or three sentences: you are the Chat surface and have no filesystem access, so you cannot read the shared-fact.txt the Code surface just wrote. Explain that a shared knowledge tier (like Nexus T2/T3) WOULD carry that fact across every surface, whereas a session-local scratch note (T1) stays only where it was written."
+    },
+    {
+      "surface": "cowork",
+      "command": "Read the file /tmp/rig-tiers-demo/shared-fact.txt and report exactly what it contains. If you cannot reach it from here, say so plainly and briefly — that boundary IS the point of this demo: a shared tier (Nexus T2/T3) would carry the fact across this sandbox even though the raw host filesystem does not."
+    }
+  ],
+  "desktop": {
+    "checkpoints": [
+      { "name": "wrote-shared", "required": true },
+      { "name": "narrated", "required": true }
+    ],
+    "trusted_folders": ["/tmp/rig-tiers-demo"]
+  },
+  "validate": {
+    "must_contain": ["wrote-shared", "narrated"],
+    "must_not_contain": []
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 180,
+    "session_max_sec": 1800,
+    "attach_gap_sec": 15,
+    "exit_hold_sec": 8,
+    "tmux_size": "1280x800"
+  }
+}

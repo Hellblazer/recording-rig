@@ -79,14 +79,13 @@ function cleanCast(s) {
   return out.join("").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
 }
 
-// Desktop coordination provider for this surface — mirrors
-// lib/coordination.sh coordination_provider_for_surface (the RDR-locked map):
-// an explicit spec.coordination wins; otherwise cowork -> agent-transcript-tail,
-// chat/code -> mcp-bridge. Selects how the transcript at dataPath is read.
-function desktopProvider(s) {
-  const explicit = s.coordination ?? "auto";
+// Desktop coordination provider for one surface — mirrors lib/coordination.sh
+// coordination_provider_for_surface (the RDR-locked map): an explicit
+// spec.coordination wins; otherwise cowork -> agent-transcript-tail, chat/code ->
+// mcp-bridge.
+function providerFor(surface, coordination) {
+  const explicit = coordination ?? "auto";
   if (explicit && explicit !== "auto") return explicit;
-  const surface = s.surface ?? "chat";
   if (surface === "cowork") return "agent-transcript-tail";
   // chat/code -> mcp-bridge. An unrecognized surface defaults to mcp-bridge:
   // acceptable because record.sh's preflight resolves+validates the surface via
@@ -98,6 +97,19 @@ function desktopProvider(s) {
     console.error(`[validate] WARN: unrecognized surface '${surface}' — defaulting to mcp-bridge validation`);
   }
   return "mcp-bridge";
+}
+
+// Does this (possibly multi-surface) spec use the bridge for ANY step? Mirrors
+// record.sh's USED_BRIDGE (rr-u07): if so, the bridge transcript is the validate
+// target — it carries those steps' checkpoints + rig_turn_end (e.g. the Code/Chat
+// steps of the tier demo). Only when EVERY step is agent-transcript-tail do we
+// validate the audit.jsonl. The surface list comes from steps[] when present,
+// else the single legacy top-level surface.
+function desktopUsesBridge(s) {
+  const surfaces = (Array.isArray(s.steps) && s.steps.length > 0)
+    ? s.steps.map((st) => st.surface ?? "chat")
+    : [s.surface ?? "chat"];
+  return surfaces.some((surface) => providerFor(surface, s.coordination) === "mcp-bridge");
 }
 
 // mcp-bridge surfaces (Chat / Code): the bridge transcript is NDJSON, one
@@ -207,9 +219,9 @@ if (backend === "desktop") {
   // Pick how to read the transcript at dataPath from the surface's coordination
   // provider: mcp-bridge surfaces (Chat/Code) produce the bridge transcript;
   // agent-transcript-tail (CoWork) produces the Agent-SDK audit.jsonl.
-  text = desktopProvider(spec) === "agent-transcript-tail"
-    ? validateAgentTranscript(dataPath, extraFailures)
-    : validateBridgeTranscript(dataPath, spec, extraFailures);
+  text = desktopUsesBridge(spec)
+    ? validateBridgeTranscript(dataPath, spec, extraFailures)
+    : validateAgentTranscript(dataPath, extraFailures);
 
   // Optional .mov sanity — WARN only, never gates the GIF (the bead is explicit).
   if (movPath) {

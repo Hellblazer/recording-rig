@@ -313,17 +313,44 @@ if [[ "$BACKEND" == "desktop" ]]; then
   # 2026-05-25): Chat/Code -> mcp-bridge (the sentinel watch below, unchanged);
   # CoWork -> agent-transcript-tail (audit.jsonl {type:result}). surface is a
   # TOP-LEVEL spec field (matches SpecReader.swift); coordination defaults to auto.
-  SURFACE=$(jq -r '.surface // "chat"' "$SPEC" 2>/dev/null || echo "chat")
   COORD_OVERRIDE=$(jq -r '.coordination // "auto"' "$SPEC" 2>/dev/null || echo "auto")
-  PROVIDER=$(coordination_provider_for_surface "$SURFACE" "$COORD_OVERRIDE") \
-    || { echo "record: could not resolve coordination provider for surface '$SURFACE'" >&2; exit 1; }
   LAMS_ROOT="$CLAUDE_RIG_DIR/local-agent-mode-sessions"
-  echo "[rig] desktop: surface=$SURFACE coordination=$PROVIDER"
 
-  # Pessimistic-case preflight (rr-2pp.5.4): a fallback-provider surface (CoWork)
-  # carries no rig.ask and — until validate.mjs reads audit.jsonl (rr-2pp.5.5) —
-  # no transcript-asserted required checkpoints. Reject such specs BEFORE launch.
-  coordination_preflight_gates "$PROVIDER" "$SPEC" || exit 2
+  # Per-step surfaces (rr-u07 multi-surface choreography). Mirrors SpecReader's
+  # synthesis: an explicit top-level steps[] wins; otherwise one step per command
+  # on the single `surface`. record.sh owns coordination, so it derives the surface
+  # PER STEP here — used for the gate preflight and the per-step turn-end watch. The
+  # driver's announced steps-total is cross-checked against this count below.
+  mapfile -t STEP_SURFACES < <(jq -r '
+    if (.steps? | type) == "array" and (.steps | length) > 0 then
+      .steps[] | (.surface // "chat")
+    else
+      ( .surface // "chat" ) as $s
+      | ( if (.agent.commands? | type) == "array"
+          then [ .agent.commands[] | select(. != "" and . != null) ] else [] end ) as $cmds
+      | ( if ($cmds | length) > 0 then ($cmds | length)
+          elif ((.agent.command // "") | length) > 0 then 1
+          else 0 end ) as $n
+      | range(0; $n) | $s
+    end' "$SPEC" 2>/dev/null)
+  (( ${#STEP_SURFACES[@]} > 0 )) || { echo "record: spec has no steps[] and no agent.command(s)" >&2; exit 1; }
+  SURFACE=$(IFS=+; echo "${STEP_SURFACES[*]}")   # display / quality-log (e.g. code+chat+cowork)
+
+  # Resolve each step's provider; track whether ANY step uses the bridge (its
+  # transcript is then the validate target). Pessimistic-case preflight (rr-2pp.5.4),
+  # now per step: a fallback-provider surface (CoWork) carries no rig.ask and no
+  # transcript-asserted required checkpoints, so a spec putting gates[]/required
+  # checkpoints on such a surface is rejected BEFORE launch.
+  USED_BRIDGE=0
+  declare -a STEP_PROVIDERS=()
+  for _sfc in "${STEP_SURFACES[@]}"; do
+    _prov=$(coordination_provider_for_surface "$_sfc" "$COORD_OVERRIDE") \
+      || { echo "record: could not resolve coordination provider for surface '$_sfc'" >&2; exit 1; }
+    STEP_PROVIDERS+=("$_prov")
+    [[ "$_prov" == "mcp-bridge" ]] && USED_BRIDGE=1
+    coordination_preflight_gates "$_prov" "$SPEC" || exit 2
+  done
+  echo "[rig] desktop: steps=${#STEP_SURFACES[@]} surfaces=$SURFACE"
 
   # Code-surface trusted-folder pre-seeding (rr-2pp.5.3): merge the spec's
   # desktop.trusted_folders into the profile config so local-agent-mode does not
@@ -407,67 +434,89 @@ if [[ "$BACKEND" == "desktop" ]]; then
   [[ -n "$RIG_PID" ]] || { echo "record: could not resolve Claude-Rig pid" >&2; exit 1; }
   echo "[rig] desktop: Claude-Rig pid=$RIG_PID"
 
-  # Baseline for agent-transcript-tail: only an audit.jsonl modified at/after
-  # submit is a turn-end candidate, so a completed prior run's stale
-  # {type:result} cannot read as this turn's end. Empty for mcp-bridge.
-  COORD_BASELINE=$(coordination_ready "$PROVIDER")
-
-  # Driver: AX-drive + capture. Writes prompt-submitted + the .mov; waits on
-  # agent-done (written below) to stop + finishWriting().
+  # Driver: AX-drive + capture. Announces steps-total, then drives each step and
+  # writes step-K-submitted; waits on step-K-done (per step) + agent-done (final).
   "$HERE/bin/desktop-driver" --pid "$RIG_PID" --spec "$SPEC" &
   DRIVER_PID=$!
 
-  # record.sh owns the turn-end watch (same ceilings as the CLI driver), now
-  # routed through the per-surface provider. mcp-bridge is the existing
-  # sentinel_wait_idle (byte-identical); agent-transcript-tail tails audit.jsonl.
-  # Capture the return code without tripping `set -e` (rc 2 = soft miss).
-  IDLE_RC=0
-  coordination_wait_turn_end "$PROVIDER" "$IDLE_SECONDS" "$TURN_TIMEOUT_SEC" "$SESSION_MAX_SEC" \
-    "$LAMS_ROOT" "$COORD_BASELINE" || IDLE_RC=$?
-  # rc 2 = pacing.turn_timeout_sec elapsed with no turn-end progress (a soft
-  # miss); rc 0 = turn-end observed; rc 1 = session ceiling. The soft-miss
-  # SYNTHESIS is mcp-bridge-only: it validates against the bridge transcript, so
-  # a fallback rig_turn_end there lets the run COMPLETE (GIF + warning) instead
-  # of hard-failing. An empty transcript means the bridge was never reached — a
-  # hard miss the validator reports; we never synthesize that into a false pass.
-  # agent-transcript-tail reads turn-end from audit.jsonl (not the bridge
-  # transcript), so there is nothing to synthesize there; the soft miss is still
-  # logged, and full CoWork validation reconciliation is rr-2pp.5.4/5.5.
+  # Per-step turn-end watch (rr-u07). record.sh still owns turn-end detection (RDR
+  # L169); it now loops over the driver's steps, running the watch for EACH step's
+  # surface provider — mcp-bridge is the existing sentinel_wait_idle (byte-identical
+  # for a single bridge step); agent-transcript-tail tails audit.jsonl. The handshake:
+  # the driver writes step-K-submitted, record.sh writes step-K-done, repeat; then
+  # agent-done is the final flush signal. SOFT_MISS aggregates across steps.
+  driver_alive() { kill -0 "$DRIVER_PID" 2>/dev/null; }
+
+  # The driver announces how many steps it will drive; cross-check against our own
+  # spec read so a SpecReader/jq synthesis drift is caught before it desyncs.
+  STEPS_TOTAL=0
+  _w=0
+  while [[ ! -s "$(sentinel_path steps-total)" ]]; do
+    driver_alive || { echo "record: driver exited before announcing steps-total" >&2; break; }
+    (( _w >= 60 )) && { echo "record: driver never announced steps-total (60s)" >&2; break; }
+    sleep 1; _w=$((_w + 1))
+  done
+  STEPS_TOTAL="$(cat "$(sentinel_path steps-total)" 2>/dev/null || echo 0)"
+  [[ "$STEPS_TOTAL" =~ ^[0-9]+$ ]] || STEPS_TOTAL=0
+  if (( STEPS_TOTAL != ${#STEP_SURFACES[@]} )); then
+    echo "record: step-count mismatch — driver=$STEPS_TOTAL record.sh=${#STEP_SURFACES[@]}; aborting coordination" >&2
+    STEPS_TOTAL=0
+  fi
+
   SOFT_MISS=0
-  if (( IDLE_RC == 2 )); then
-    if [[ "$PROVIDER" == "mcp-bridge" ]]; then
-      if [[ -s "$TRANSCRIPT_OUT" ]]; then
-        SOFT_MISS=1
-        # Synthesis is best-effort: a failure here must NOT abort the run (the
-        # EXIT trap would then SIGTERM the driver mid-flush). Let it fall through
-        # to validate — which fails on the missing turn-end and refuses the GIF.
+  IDLE_RC=0
+  for (( _k = 0; _k < STEPS_TOTAL; _k++ )); do
+    # Wait (bounded, with driver-liveness) for the driver to submit step _k.
+    _w=0
+    while [[ ! -e "$(sentinel_path "step-${_k}-submitted")" ]]; do
+      driver_alive || { echo "record: driver exited before step $_k submit" >&2; break; }
+      (( _w >= SESSION_MAX_SEC )) && { echo "record: step $_k never submitted (${SESSION_MAX_SEC}s)" >&2; break; }
+      sleep 1; _w=$((_w + 1))
+    done
+    [[ -e "$(sentinel_path "step-${_k}-submitted")" ]] || break  # gave up -> stop coordinating
+
+    _provider="${STEP_PROVIDERS[$_k]}"
+    # Baseline AFTER this step's submit: only an audit.jsonl modified at/after now
+    # is this step's turn-end candidate (agent-transcript-tail). Empty for mcp-bridge.
+    STEP_BASELINE=$(coordination_ready "$_provider")
+    _rc=0
+    coordination_wait_turn_end "$_provider" "$IDLE_SECONDS" "$TURN_TIMEOUT_SEC" "$SESSION_MAX_SEC" \
+      "$LAMS_ROOT" "$STEP_BASELINE" || _rc=$?
+    (( _rc != 0 )) && IDLE_RC=$_rc  # remember the last non-zero for the quality log
+    # rc 2 = soft miss (turn_timeout, no turn-end progress). Synthesis is mcp-bridge
+    # only (it validates the bridge transcript); a fallback rig_turn_end there lets
+    # the run COMPLETE instead of hard-failing. Best-effort — never abort (the EXIT
+    # trap would SIGTERM the driver mid-flush). Other rc != 0 -> not settled cleanly.
+    if (( _rc == 2 )); then
+      SOFT_MISS=1
+      if [[ "$_provider" == "mcp-bridge" && -s "$TRANSCRIPT_OUT" ]]; then
         if quality_synthesize_turn_end "$TRANSCRIPT_OUT" "$SESSION"; then
-          echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; synthesized fallback turn-end" >&2
+          echo "[rig] desktop: step $_k SOFT MISS — synthesized fallback turn-end" >&2
         else
-          echo "[rig] desktop: SOFT MISS — model skipped rig.turn_end; fallback synthesis FAILED" >&2
+          echo "[rig] desktop: step $_k SOFT MISS — fallback synthesis FAILED" >&2
         fi
       else
-        echo "record: desktop idle-wait did not settle cleanly (rc=$IDLE_RC)" >&2
+        echo "[rig] desktop: step $_k SOFT MISS ($_provider)" >&2
       fi
-    else
-      SOFT_MISS=1
-      echo "[rig] desktop: SOFT MISS — audit.jsonl appeared but no {type:result} within turn_timeout ($PROVIDER)" >&2
+    elif (( _rc != 0 )); then
+      echo "record: step $_k turn-end did not settle cleanly (rc=$_rc)" >&2
     fi
-  elif (( IDLE_RC != 0 )); then
-    echo "record: desktop idle-wait did not settle cleanly (rc=$IDLE_RC)" >&2
-  fi
-  touch "$(sentinel_path agent-done)"   # signal the driver to flush + exit
+    touch "$(sentinel_path "step-${_k}-done")"  # advance the driver to step _k+1
+  done
+  touch "$(sentinel_path agent-done)"  # final flush signal to the driver
   wait "$DRIVER_PID" 2>/dev/null || true
   DRIVER_PID=""
   echo "[rig] desktop: capture complete -> $MOV_OUT"
 
-  # Validate. The transcript validate.mjs reads depends on the provider:
-  # mcp-bridge -> the bridge transcript; agent-transcript-tail (CoWork) -> this
-  # run's audit.jsonl (resolved like the turn-end watch). Capture the verdict
-  # BEFORE branching so every desktop run lands one quality.jsonl entry.
+  # Validate target (rr-u07). If ANY step used the bridge, validate the bridge
+  # transcript — it carries those steps' checkpoints + rig_turn_end (for the
+  # multi-surface tier demo: the Code/Chat steps). Only when EVERY step is
+  # agent-transcript-tail do we validate the last step's audit.jsonl (the
+  # single-surface CoWork case, unchanged). Captured BEFORE branching so every
+  # desktop run lands one quality.jsonl entry.
   VALIDATE_INPUT="$TRANSCRIPT_OUT"
-  if [[ "$PROVIDER" == "agent-transcript-tail" ]]; then
-    AUDIT_INPUT="$(coordination_transcript_path "$PROVIDER" "$LAMS_ROOT" "$COORD_BASELINE" 2>/dev/null || true)"
+  if (( USED_BRIDGE == 0 )); then
+    AUDIT_INPUT="$(coordination_transcript_path "agent-transcript-tail" "$LAMS_ROOT" "${STEP_BASELINE:-0}" 2>/dev/null || true)"
     if [[ -n "$AUDIT_INPUT" ]]; then
       VALIDATE_INPUT="$AUDIT_INPUT"
       echo "[rig] desktop: validating against audit.jsonl -> $VALIDATE_INPUT"
