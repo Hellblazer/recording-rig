@@ -45,7 +45,8 @@ confirm before proceeding.
    bin/build-desktop-driver.sh && bash bin/build-ax-dump.sh && bash bin/build-perms-check.sh   # macOS
    node --test bin/validate.test.mjs bridge/server.test.mjs \
      lib/quality.test.mjs lib/coordination.test.mjs lib/trusted-folders.test.mjs \
-     lib/desktop-doctor.test.mjs bin/doctor.test.mjs bin/diagnose-desktop.test.mjs   # expect 0 failures
+     lib/competing-claude.test.mjs lib/desktop-doctor.test.mjs bin/doctor.test.mjs \
+     bin/diagnose-desktop.test.mjs   # expect 0 failures
    bash bin/doctor.sh    # expect rc 0
    ```
    Then a parity simulation against the bumped manifests — `plugin.json` version, the
