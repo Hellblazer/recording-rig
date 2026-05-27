@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-05-26
+
+Desktop-backend fixes for **Claude.app v1.9255.0**. The app auto-updated ~700 builds
+from the v1.8555.2 the v0.2.0 Desktop backend was certified against, regressing two
+things; both are fixed here, no app pinning. The CLI backend is unchanged.
+
+### Fixed
+- **Desktop capture geometry** (`rr-79v`) — v1.9255.0 exposes a small secondary
+  on-screen window (~280×320) for the same pid; ScreenCaptureKit was grabbing it
+  instead of the main window, producing a tiny black capture. Capture now selects the
+  **largest** on-screen window owned by the Claude-Rig pid.
+- **`examples/two-pane`** (`rr-x15`) — the demo's `JOB_ID` is now runtime-dynamic so the
+  recorded model reliably makes the Bash tool call (it was answering from the prompt).
+
+### Added
+- **Competing-Claude.app guard** (`rr-re6`) — hands-free Desktop recording requires that
+  no *other* Claude.app instance is running. macOS activates per app-bundle, so a second
+  instance keeps the foreground when the Claude-Rig instance launches, leaving it
+  backgrounded with an unmaterialized accessibility tree (the driver then times out — a
+  manual window click was the prior workaround). `record.sh` now refuses while a non-Rig
+  Claude.app main is running and `doctor` warns; override with `RIG_ALLOW_COMPETING_CLAUDE=1`.
+- **Desktop demo GIFs** in the README — the Chat, Code, and CoWork surfaces, recorded live.
+
 ## [0.2.0] — 2026-05-26
 
 The headline of this release is the **Desktop backend** (RDR-001): recording the
