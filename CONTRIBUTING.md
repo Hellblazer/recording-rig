@@ -92,8 +92,16 @@ branch + PR, then stops for the human.
 
 # Human — cuts:
 git checkout main && git pull
-git tag -a v<X.Y.Z> -m "release: v<X.Y.Z> — <summary>"
-git push origin v<X.Y.Z>                       # fires version-parity strict tag-match
+# PARITY GATE: the bump must be IN main first — a still-open release PR leaves main at
+# the old version, so tagging there pushes a tag version-parity rejects. Confirm all
+# three read the target before tagging:
+v=<X.Y.Z>
+[ "$(jq -r .version .claude-plugin/plugin.json)" = "$v" ] \
+  && [ "$(jq -r '.plugins[]|select(.name=="recording-rig")|.version' .claude-plugin/marketplace.json)" = "$v" ] \
+  && [ "$(jq -r '.plugins[]|select(.name=="recording-rig")|.source.ref' .claude-plugin/marketplace.json)" = "v$v" ] \
+  || { echo "main is not at $v — is the release PR merged? Do NOT tag."; }
+git tag -a "v$v" -m "release: v$v — <summary>"
+git push origin "v$v"                          # fires version-parity strict tag-match
 gh release create v<X.Y.Z> --title "v<X.Y.Z> — <summary>" --notes-file <CHANGELOG [X.Y.Z] section>
 ```
 
