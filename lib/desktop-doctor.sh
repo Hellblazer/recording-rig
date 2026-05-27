@@ -29,6 +29,10 @@ _RIG_ROOT="$(cd "$_DESKTOP_DOCTOR_LIB_DIR/.." && pwd)"
 # seam is self-contained.
 # shellcheck disable=SC1091
 source "$_DESKTOP_DOCTOR_LIB_DIR/quality.sh"
+# rr-re6 competing-Claude.app detection (the decision fn behind record.sh's
+# desktop guard) — reused by the advisory check below.
+# shellcheck disable=SC1091
+source "$_DESKTOP_DOCTOR_LIB_DIR/competing-claude.sh"
 
 # --- resolvable paths (env overrides win; live defaults below) ---
 : "${CLAUDE_RIG_DIR:=$HOME/Library/Application Support/Claude-Rig}"
@@ -166,6 +170,22 @@ _desktop_check_caches() {
   fi
 }
 
+# Competing-instance advisory (rr-re6): a NON-Rig Claude.app instance running at
+# record time steals macOS foreground from the Rig instance record.sh launches, so
+# its Chromium accessibility tree never materializes and the desktop driver times
+# out. record.sh ENFORCES this (refuses); doctor surfaces it so the operator can
+# quit the other instance ahead of time. Reuses competing_claude_pids over live ps.
+_desktop_check_competing_claude() {
+  local competing
+  competing="$(ps -axo pid=,command= | competing_claude_pids "$CLAUDE_RIG_DIR" | paste -sd' ' -)"
+  if [[ -z "$competing" ]]; then
+    ok "no competing Claude.app instance running"
+  else
+    warn "a competing Claude.app instance is running (pid(s): $competing) — it steals foreground from the Claude-Rig instance, blocking hands-free desktop recording (record.sh refuses)"
+    hint "quit your other Claude.app (⌘Q) before recording, or set RIG_ALLOW_COMPETING_CLAUDE=1 to override"
+  fi
+}
+
 # desktop_doctor_checks — run every Desktop advisory check. Sections relocated
 # from bin/doctor.sh §7 (render deps + build artifacts + soft-miss trend) plus
 # the new live checks (Claude.app, TCC perms, profile, bridge, probe caches).
@@ -212,6 +232,7 @@ desktop_doctor_checks() {
 
   _desktop_check_profile
   _desktop_check_bridge
+  _desktop_check_competing_claude
   _desktop_check_caches
 
   # Soft-miss trend (RDR-001 Phase 3 Step 2): warn when the Desktop model skips
