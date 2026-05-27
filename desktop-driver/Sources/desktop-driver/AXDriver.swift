@@ -69,6 +69,63 @@ final class AXDriver: AXDriving {
         return ref as? String
     }
 
+    // Collect ALL elements matching role+description. A surface switch can leave
+    // transient/duplicate composers in the Chromium a11y tree mid-transition, so
+    // find() (first DFS match) can return the wrong one (rr-bw3).
+    func findAll(role: String, description: String) -> [AXUIElement] {
+        var out: [AXUIElement] = []
+        collect(from: app, role: role, description: description, depth: 0, into: &out)
+        return out
+    }
+
+    private func collect(from element: AXUIElement, role: String, description: String, depth: Int, into out: inout [AXUIElement]) {
+        if depth > 80 { return }
+        if stringAttr(element, kAXRoleAttribute) == role,
+           stringAttr(element, kAXDescriptionAttribute) == description {
+            out.append(element)
+        }
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else { return }
+        for child in children { collect(from: child, role: role, description: description, depth: depth + 1, into: &out) }
+    }
+
+    // Resolve which composer to drive among matches: prefer the focused / on-screen
+    // one (rr-bw3 — the settled, visible composer is [focused]; a transient one
+    // grabbed mid-transition is not). Pure ranking lives in selectComposerIndex.
+    func findComposer(role: String, description: String) -> AXUIElement? {
+        let matches = findAll(role: role, description: description)
+        guard !matches.isEmpty else { return nil }
+        let candidates = matches.map { ComposerCandidate(focused: isFocused($0), onScreen: isOnScreen($0)) }
+        guard let idx = selectComposerIndex(candidates) else { return nil }
+        return matches[idx]
+    }
+
+    private func isFocused(_ element: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXFocusedAttribute as CFString, &ref) == .success else { return false }
+        return (ref as? Bool) ?? false
+    }
+
+    // On-screen = a real, non-zero frame. A hidden / switched-away SPA composer
+    // reports a zero (or absent) size; the visible one has a real region.
+    private func isOnScreen(_ element: AXUIElement) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &ref) == .success,
+              let value = ref, CFGetTypeID(value) == AXValueGetTypeID() else { return false }
+        var size = CGSize.zero
+        guard AXValueGetValue((value as! AXValue), .cgSize, &size) else { return false }
+        return size.width > 1 && size.height > 1
+    }
+
+    // Read kAXValue (the composer's text) — for the post-setValue read-back that
+    // confirms the prompt actually landed on the chosen composer (rr-bw3).
+    func value(_ element: AXUIElement) -> String? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &ref) == .success else { return nil }
+        return ref as? String
+    }
+
     @discardableResult
     func press(_ element: AXUIElement) -> Bool {
         AXUIElementPerformAction(element, kAXPressAction as CFString) == .success

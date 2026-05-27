@@ -56,12 +56,38 @@ func valueSettable(_ element: AXUIElement) -> Bool {
     return settable.boolValue
 }
 
+// kAXPosition (.cgPoint) + kAXSize (.cgSize) — the element's screen frame. A
+// hidden/switched-away surface's composer typically reports a zero size or an
+// off-screen origin; the visible one has a real on-screen frame (rr-u07 CoWork
+// diagnosis — distinguishing the visible composer from a stale one).
+func frameStr(_ element: AXUIElement) -> String {
+    func axStruct<T>(_ attr: String, _ type: AXValueType, _ out: inout T) -> Bool {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attr as CFString, &ref) == .success,
+              let value = ref, CFGetTypeID(value) == AXValueGetTypeID() else { return false }
+        return AXValueGetValue((value as! AXValue), type, &out)
+    }
+    var p = CGPoint.zero, s = CGSize.zero
+    let hasP = axStruct(kAXPositionAttribute, .cgPoint, &p)
+    let hasS = axStruct(kAXSizeAttribute, .cgSize, &s)
+    guard hasP || hasS else { return "-" }
+    return "\(Int(p.x)),\(Int(p.y)) \(Int(s.width))x\(Int(s.height))"
+}
+
+func boolAttr(_ element: AXUIElement, _ attribute: String) -> Bool {
+    var ref: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &ref) == .success else { return false }
+    return (ref as? Bool) ?? false
+}
+
 struct Node {
     let role: String
     let description: String
     let title: String
     let acts: [String]
     let settable: Bool
+    let frame: String
+    let focused: Bool
 }
 
 // Bounded DFS mirroring AXDriver.search's depth cap. Returns total nodes
@@ -77,7 +103,9 @@ func walk(_ element: AXUIElement, depth: Int, total: inout Int, hits: inout [Nod
             description: stringAttr(element, kAXDescriptionAttribute) ?? "",
             title: stringAttr(element, kAXTitleAttribute) ?? "",
             acts: actions(element),
-            settable: role == "AXTextArea" || role == "AXTextField" ? valueSettable(element) : false
+            settable: role == "AXTextArea" || role == "AXTextField" ? valueSettable(element) : false,
+            frame: frameStr(element),
+            focused: boolAttr(element, kAXFocusedAttribute)
         ))
     }
     var childrenRef: CFTypeRef?
@@ -148,6 +176,8 @@ while true {
             n.role.padding(toLength: 12, withPad: " ", startingAt: 0),
             "desc=\(n.description.isEmpty ? "-" : "'\(n.description)'")",
             "title=\(n.title.isEmpty ? "-" : "'\(n.title)'")",
+            "frame=\(n.frame)",
+            n.focused ? "[focused]" : "",
             n.settable ? "[value-settable]" : "",
             n.acts.isEmpty ? "" : "actions=\(n.acts.joined(separator: ","))",
         ].filter { !$0.isEmpty }
