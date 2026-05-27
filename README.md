@@ -174,6 +174,20 @@ window with ScreenCaptureKit. The model calls back through the bundled MCP **bri
 and a transcript; there is no asciinema cast. Requires the bridge `.mcpb` installed **and
 enabled** in the `Claude-Rig` profile (see `docs/design.md`).
 
+The three surfaces, recorded live in the isolated `Claude-Rig` app:
+
+**Chat** (`mcp-bridge`):
+
+![desktop chat surface](docs/assets/desktop-chat.gif)
+
+**Code** (`mcp-bridge`, working in a trusted folder):
+
+![desktop code surface](docs/assets/desktop-code.gif)
+
+**CoWork** (`agent-transcript-tail`):
+
+![desktop cowork surface](docs/assets/desktop-cowork.gif)
+
 ```jsonc
 {
   "backend": "desktop",                // "cli" (default) | "desktop"
