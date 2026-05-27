@@ -75,6 +75,17 @@ func armWait(role: String, description: String, timeout: Double = 30, poll: Doub
 }
 
 do {
+    // 0. Foreground the Rig instance (rr-re6). A backgrounded Electron window
+    //    collapses its Chromium a11y tree (armWait then times out) AND renders
+    //    nothing (ScreenCaptureKit captures black), so bring it forward and let it
+    //    settle before arming/capturing. The AX-native kAXFrontmost set works under
+    //    the Accessibility grant; NSRunningApplication.activate() is a belt-and-
+    //    suspenders nudge (macOS restricts it for a .accessory caller).
+    ax.armManualAccessibility()
+    ax.bringToFront()
+    NSRunningApplication(processIdentifier: config.rigPid)?.activate()
+    Thread.sleep(forTimeInterval: 1.5)
+
     // 1. Window geometry — set, then re-assert if it reverted.
     if ax.setWindowSize(spec.recordingSize),
        sizeNeedsReassert(current: ax.windowSize(), target: spec.recordingSize) {

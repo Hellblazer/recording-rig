@@ -32,11 +32,19 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
 
     func start() throws {
         let content = try shareableContent()
-        guard let window = content.windows.first(where: {
-            $0.owningApplication?.processID == rigPid && $0.isOnScreen
-        }) else {
+        // rr-79v: pick the LARGEST on-screen window for the rig pid, not the first
+        // — v1.9255.0 exposes a small secondary window (~280x320) for the same pid,
+        // and `.first` grabbed that tiny black region instead of the main chat window.
+        let candidates = content.windows.map {
+            WindowCandidate(
+                pid: $0.owningApplication?.processID ?? -1,
+                isOnScreen: $0.isOnScreen,
+                area: Double($0.frame.width) * Double($0.frame.height))
+        }
+        guard let idx = selectCaptureWindowIndex(candidates, rigPid: rigPid) else {
             throw DriverError.badConfig("no on-screen window for Claude-Rig pid \(rigPid)")
         }
+        let window = content.windows[idx]
 
         // Capture the window's full compositor output (all layers, incl. any
         // BrowserView/GPU content) — supersedes the old page.screencast concern.
