@@ -74,8 +74,17 @@ confirm before proceeding.
 3. **Tag + push** (fires `version-parity`'s strict tag-match over both manifests):
    ```bash
    git checkout main && git pull
-   git tag -a v<X.Y.Z> -m "release: v<X.Y.Z> — <summary>"
-   git push origin v<X.Y.Z>
+   # PARITY GATE — the bump must actually be IN main before tagging. A still-open
+   # release PR leaves main at the OLD version; tagging there pushes a tag parity
+   # rejects, and a tag on the wrong commit must be deleted + re-cut. Confirm all
+   # three read the target, or do NOT tag:
+   v=<X.Y.Z>
+   [ "$(jq -r .version .claude-plugin/plugin.json)" = "$v" ] \
+     && [ "$(jq -r '.plugins[]|select(.name=="recording-rig")|.version' .claude-plugin/marketplace.json)" = "$v" ] \
+     && [ "$(jq -r '.plugins[]|select(.name=="recording-rig")|.source.ref' .claude-plugin/marketplace.json)" = "v$v" ] \
+     || { echo "main is not at $v — is the release PR merged? Do NOT tag."; exit 1; }
+   git tag -a "v$v" -m "release: v$v — <summary>"
+   git push origin "v$v"
    ```
 4. **Publish** the GitHub Release from the CHANGELOG section:
    ```bash

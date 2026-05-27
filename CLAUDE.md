@@ -59,6 +59,7 @@ Hand-cut, tag-triggered, ref-pinned. Full procedure in `docs/RELEASE.md`. Standi
 6. **Releaser is human.** AI prepares PRs; human merges and tags.
 7. **Parity stays strict.** `.github/workflows/version-parity.yml` fails any tag whose `plugin.json` version, `marketplace.json` entry version, or `marketplace.json` `source.ref` disagree with it, and any PR that breaks either manifest's well-formedness or the marketplace↔plugin.json version match.
 8. **`CHANGELOG.md` entry lands with the version bump PR**, not after the tag.
+9. **Verify parity on `main` before tagging.** The bump must actually be *in* `main` first — a still-open release PR leaves `main` at the old version, so tagging there pushes a tag `version-parity` rejects (and a tag on the wrong commit must be deleted + re-cut). Before `git tag`, confirm `plugin.json` version, the marketplace entry version, and `source.ref` all read the target `vX.Y.Z` on the actual `main` HEAD. (Cutting v0.3.0 tripped this — tagged while the release PR was still open.)
 
 ## Reference
 

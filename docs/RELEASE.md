@@ -42,8 +42,17 @@ manifests disagree with it:
 6. Merge the PR. On main:
    ```bash
    git checkout main && git pull
-   git tag -a v<X.Y.Z> -m "release: v<X.Y.Z>"
-   git push origin v<X.Y.Z>
+   # GATE: the bump must actually be IN main before tagging. A still-open release PR
+   # leaves main at the OLD version, and tagging there pushes a tag version-parity
+   # rejects (and a tag on the wrong commit must then be deleted + re-cut). Confirm all
+   # three read the target, or do NOT tag:
+   v=<X.Y.Z>
+   [ "$(jq -r .version .claude-plugin/plugin.json)" = "$v" ] \
+     && [ "$(jq -r '.plugins[]|select(.name=="recording-rig")|.version' .claude-plugin/marketplace.json)" = "$v" ] \
+     && [ "$(jq -r '.plugins[]|select(.name=="recording-rig")|.source.ref' .claude-plugin/marketplace.json)" = "v$v" ] \
+     || { echo "main is not at $v — is the release PR merged? Do NOT tag."; }
+   git tag -a "v$v" -m "release: v$v"
+   git push origin "v$v"
    ```
 7. Watch the workflow: `gh run watch $(gh run list --workflow=version-parity.yml --limit=1 --json databaseId -q '.[0].databaseId')`.
 
