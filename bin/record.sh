@@ -2,7 +2,8 @@
 # Top-level entry point. Read a spec, drive a recording, validate, render GIF.
 # Usage: record.sh <spec.json>
 # Env overrides: SESSION, CAST_OUT, GIF_OUT, SKIP_VALIDATE, SKIP_GIF,
-#                ATTACH_GAP_SEC, SKIP_CONSENT_SWEEP, RIG_ALLOW_COMPETING_CLAUDE
+#                ATTACH_GAP_SEC, SKIP_CONSENT_SWEEP, RIG_ALLOW_COMPETING_CLAUDE,
+#                SKIP_STAGE_MANAGER_TOGGLE
 set -euo pipefail
 
 SPEC_ARG="${1:?usage: record.sh <spec.json>}"
@@ -18,6 +19,8 @@ source "$HERE/lib/coordination.sh"
 source "$HERE/lib/trusted-folders.sh"
 # shellcheck disable=SC1091
 source "$HERE/lib/competing-claude.sh"
+# shellcheck disable=SC1091
+source "$HERE/lib/stage-manager.sh"
 
 # Dedicated tmux socket per session so the rig:
 # (a) doesn't pollute the user's normal tmux server,
@@ -178,6 +181,7 @@ ASCIINEMA_PID=""
 DRIVER_PID=""
 WATCHER_PID=""
 RIG_PID=""
+STAGE_MGR_DISABLED=""  # set to 1 iff we disabled Stage Manager (cleanup restores it; rr-sm0)
 cleanup() {
   local rc=$?
   for pid in "$DRIVER_PID" "$ASCIINEMA_PID" "$WATCHER_PID"; do
@@ -188,6 +192,10 @@ cleanup() {
   # pointer. No-ops for the CLI backend (RIG_PID empty, pointer absent).
   [[ -n "$RIG_PID" ]] && kill -TERM "$RIG_PID" 2>/dev/null || true
   rm -f "$ACTIVE_SESSION" 2>/dev/null || true
+  # Restore Stage Manager if WE disabled it for this recording (rr-sm0). Runs on
+  # EXIT/INT/TERM, so an interrupt never leaves the operator's Stage Manager off;
+  # no-op for the CLI backend or when it was already off (flag empty).
+  [[ -n "${STAGE_MGR_DISABLED:-}" ]] && stage_manager_set true 2>/dev/null || true
   # Kill the whole tmux server for this session's dedicated socket and
   # remove the socket file. Each rig run gets its own socket
   # (rig-<session>), so this is always safe — we never touch the user's
@@ -414,6 +422,20 @@ if [[ "$BACKEND" == "desktop" ]]; then
     _waited=$((_waited + 2))
   done
   (( _waited > 0 )) && echo "[rig] desktop: prior instance gone after ${_waited}s; launching."
+
+  # Disable Stage Manager for the recording (rr-sm0). It repositions/animates the Rig
+  # window on the focus changes between surface switches, which corrupts the capture
+  # (ScreenCaptureKit is locked to the step-0 window and follows it as it shrinks). Do
+  # it BEFORE launch; remember we did so cleanup() restores it (even on interrupt).
+  # Skip with SKIP_STAGE_MANAGER_TOGGLE=1. No-op when already off / not configured.
+  if [[ "${SKIP_STAGE_MANAGER_TOGGLE:-0}" != "1" ]] && stage_manager_is_enabled; then
+    if stage_manager_set false; then
+      STAGE_MGR_DISABLED=1
+      echo "[rig] desktop: Stage Manager disabled for the recording (restored on exit)"
+    else
+      echo "record: warning — could not disable Stage Manager; capture may be affected on surface switches" >&2
+    fi
+  fi
 
   # Launch the isolated profile. NEVER --remote-debugging-* (the app guard quits).
   open -n -a Claude --args \

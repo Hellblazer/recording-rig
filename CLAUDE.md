@@ -23,7 +23,7 @@ Plugin-mode equivalents (when installed via marketplace):
 /recording-rig:diagnose <session>
 ```
 
-Env knobs: `SKIP_VALIDATE=1` (override validator refusal for known-good cases), `SKIP_CONSENT_SWEEP=1` (skip the auxiliary tmux session that dismisses claude's first-run consent dialogs), `RIG_ALLOW_COMPETING_CLAUDE=1` (desktop: override the rr-re6 guard that refuses to record while another Claude.app instance is running), `AGG_IDLE_TIME_LIMIT`, `GATE_PRE_ENTER_SEC` (default 5), `GATE_POST_ENTER_SEC` (default 2).
+Env knobs: `SKIP_VALIDATE=1` (override validator refusal for known-good cases), `SKIP_CONSENT_SWEEP=1` (skip the auxiliary tmux session that dismisses claude's first-run consent dialogs), `RIG_ALLOW_COMPETING_CLAUDE=1` (desktop: override the rr-re6 guard that refuses to record while another Claude.app instance is running), `SKIP_STAGE_MANAGER_TOGGLE=1` (desktop: don't auto-disable+restore macOS Stage Manager around the recording; rr-sm0), `AGG_IDLE_TIME_LIMIT`, `GATE_PRE_ENTER_SEC` (default 5), `GATE_POST_ENTER_SEC` (default 2).
 
 There is no project test suite yet. CI runs `.github/workflows/version-parity.yml` on tag push (and on PRs touching `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`) to enforce manifest/tag parity.
 
@@ -45,6 +45,7 @@ These are load-bearing knowledge that took real time to discover. Full context i
 - **`validate.mjs` is not a terminal emulator** — concatenates `o` events and strips ANSI; cursor-overwritten content leaves ghost text. For strict assertions, ask the agent to emit fresh-line sentinels like `ANSWER=42`.
 - **Companion panes must not call `start_*` tools** — they share backend state with the agent pane via sentinels and observe only. Driving from both panes hits state-machine 409s and worker-queue serialization races.
 - **A competing Claude.app instance blocks hands-free desktop recording** (rr-re6) — macOS activates per app-bundle, so a second Claude.app instance keeps the foreground when `open -n -a Claude` launches the Rig instance, leaving it backgrounded with an unmaterialized Chromium a11y tree (the driver's armWait then times out; a manual window click was the prior workaround). `record.sh` refuses while a non-Rig Claude.app *main* is running (`RIG_ALLOW_COMPETING_CLAUDE=1` overrides); detection is `lib/competing-claude.sh` (matches the marker at argv[0], not anywhere in the command line). Re-verify on Claude.app upgrades.
+- **macOS Stage Manager corrupts a multi-surface capture** (rr-sm0) — Stage Manager (`com.apple.WindowManager` `GloballyEnabled`, default-on) repositions/animates windows on focus changes, so the Rig window gets swooshed/shrunk on the focus changes between surface switches and ScreenCaptureKit (locked to the step-0 window) follows it down → skewed window on black for the latter part of the GIF. `record.sh` auto-disables it before launch and restores it in `cleanup()` (EXIT/INT/TERM, so an interrupt never leaves it off); `SKIP_STAGE_MANAGER_TOGGLE=1` opts out. Toggle is `defaults write com.apple.WindowManager GloballyEnabled -bool false && killall WindowManager`; logic in `lib/stage-manager.sh`.
 
 ## Releases
 
