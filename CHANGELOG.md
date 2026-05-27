@@ -7,6 +7,40 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-05-27
+
+**Multi-surface desktop choreography.** A single desktop recording can now tour several
+Claude.app surfaces in one continuous capture. The CLI backend is unchanged.
+
+### Added
+- **Multi-surface `steps[]`** (rr-u07) — a top-level `steps[]` of `{surface, command,
+  system_prompt_prologue?}` drives several surfaces (e.g. Code → Chat → CoWork) in ONE
+  continuous capture, mixing coordination providers per step (bridge for Chat/Code,
+  agent-transcript-tail for CoWork). Supersedes the single-surface fields; existing
+  single-surface specs are unchanged. Worked example: `examples/desktop-tiers.json` (the
+  README's tier-semantics demo), driven by a driver↔`record.sh` `step-K-submitted` /
+  `step-K-done` sentinel handshake.
+- **Automatic Stage Manager handling** (rr-sm0) — `record.sh` disables macOS Stage Manager
+  before a desktop recording and restores it on exit (including on interrupt), so it can't
+  reshuffle the Rig window mid-capture on surface switches. `SKIP_STAGE_MANAGER_TOGGLE=1`
+  opts out.
+- `ax-dump` now emits each node's position/size and `[focused]` state (selector authoring +
+  diagnosis).
+
+### Fixed
+- **CoWork (and any later multi-surface step) now lands its prompt** (rr-bw3) — the driver
+  drives the focused/on-screen composer instead of a transient one left mid-transition, with
+  a post-switch settle. Previously a later step could submit into a stale composer and never
+  start its turn.
+- Multi-surface `steps[]`-only specs pass the spec-sanity preflight; the gate/checkpoint
+  preflight is evaluated per-run (a bridge step can carry the spec's checkpoints) rather than
+  rejecting on a fallback step; consecutive bridge steps each wait for their own `rig_turn_end`
+  (a shared turn-end sentinel no longer lets a later step complete prematurely) (rr-u07).
+
+### Changed
+- README: documents the `steps[]` schema + the multi-surface tier demo, and notes the
+  one-time CoWork working-folder selection (like Code).
+
 ## [0.2.1] — 2026-05-26
 
 Desktop-backend fixes for **Claude.app v1.9255.0**. The app auto-updated ~700 builds
