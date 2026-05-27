@@ -286,6 +286,15 @@ validates the `audit.jsonl` instead. `examples/desktop-tiers.json` is the worked
 walks Code → Chat → CoWork to show what each surface can and cannot see across the
 filesystem and session boundaries.
 
+![desktop multi-surface tiers](docs/assets/desktop-tiers.gif)
+
+> One recording, three surfaces, one continuous capture. **Code** writes
+> `/tmp/rig-tiers-demo/shared-fact.txt` and narrates the host-filesystem fact vs a
+> session-only note; **Chat** (no filesystem) explains a shared tier would carry the fact
+> across surfaces while session scratch would not; **CoWork** tries to read the file and
+> reports that its sandbox has its own filesystem — the boundary a shared tier (e.g. Nexus
+> T2/T3) bridges. Spec: [`examples/desktop-tiers.json`](examples/desktop-tiers.json).
+
 #### One-time manual setup (per `Claude-Rig` profile)
 
 The bridge and the Code working folder are **not** scriptable end-to-end; do these once:
