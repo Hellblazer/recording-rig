@@ -33,7 +33,7 @@ func fail(_ message: String) -> Never {
 
 let config: DriverConfig
 let spec: DriverSpec
-let selectors: SurfaceSelectors
+let allSelectors: Selectors
 do {
     config = try DriverConfig.parse(
         arguments: CommandLine.arguments,
@@ -42,12 +42,14 @@ do {
     spec = try SpecReader.load(path: config.specPath)
 
     // Selectors file sits beside the binary (bin/desktop-ax-selectors.json),
-    // overridable via RIG_SELECTORS for non-standard layouts / tests.
+    // overridable via RIG_SELECTORS for non-standard layouts / tests. Kept whole
+    // (not pre-resolved to one surface) so the step loop can resolve each step's
+    // surface (rr-u07 multi-surface choreography).
     let selectorsPath = ProcessInfo.processInfo.environment["RIG_SELECTORS"]
         ?? URL(fileURLWithPath: CommandLine.arguments[0])
             .deletingLastPathComponent()
             .appendingPathComponent("desktop-ax-selectors.json").path
-    selectors = try Selectors.load(path: selectorsPath).surface(spec.surface)
+    allSelectors = try Selectors.load(path: selectorsPath)
 } catch {
     fail("\(error)")
 }
@@ -55,7 +57,7 @@ do {
 // INVARIANT: init NSApplication as .accessory before any CG/SCK usage.
 NSApplication.shared.setActivationPolicy(.accessory)
 
-log("pid=\(config.rigPid) session=\(config.session) surface=\(spec.surface) commands=\(spec.commands.count)")
+log("pid=\(config.rigPid) session=\(config.session) steps=\(spec.steps.count) surfaces=\(spec.steps.map { $0.surface }.joined(separator: ","))")
 
 let ax = AXDriver(rigPid: config.rigPid)
 let sentinels = SentinelWriter(directory: config.tmpRoot, session: config.session)
@@ -75,62 +77,66 @@ func armWait(role: String, description: String, timeout: Double = 30, poll: Doub
 }
 
 do {
-    // 0. Foreground the Rig instance (rr-re6). A backgrounded Electron window
-    //    collapses its Chromium a11y tree (armWait then times out) AND renders
-    //    nothing (ScreenCaptureKit captures black), so bring it forward and let it
-    //    settle before arming/capturing. The AX-native kAXFrontmost set works under
-    //    the Accessibility grant; NSRunningApplication.activate() is a belt-and-
-    //    suspenders nudge (macOS restricts it for a .accessory caller).
+    // 0. Foreground the Rig instance (rr-re6) — once, before driving. A backgrounded
+    //    Electron window collapses its Chromium a11y tree (armWait then times out)
+    //    AND renders black, so bring it forward and let it settle. The rr-re6
+    //    record.sh guard ensures no competing Claude.app instance steals it back.
     ax.armManualAccessibility()
     ax.bringToFront()
     NSRunningApplication(processIdentifier: config.rigPid)?.activate()
     Thread.sleep(forTimeInterval: 1.5)
 
-    // 1. Window geometry — set, then re-assert if it reverted.
+    // 1. Window geometry — set once, re-assert if it reverted.
     if ax.setWindowSize(spec.recordingSize),
        sizeNeedsReassert(current: ax.windowSize(), target: spec.recordingSize) {
         _ = ax.setWindowSize(spec.recordingSize)
     }
 
-    // 2. Navigate to the surface tab.
-    let navButton = armWait(role: selectors.navButton.role, description: selectors.navButton.axDescription)
-    guard ax.press(navButton) else { fail("AXPress failed on \(spec.surface) nav button") }
+    // 2. Announce the step count so record.sh's per-step watch loop knows how many
+    //    turns to coordinate (rr-u07); it cross-checks this against its own spec read.
+    try sentinels.write(suffix: "steps-total", content: String(spec.steps.count))
 
-    // rr-2pp.3.1 drives the first command (the MVV gate uses one). Multi-command
-    // desktop pacing (wait for each turn to idle before the next paste) is wired
-    // with the record.sh desktop dispatch (rr-2pp.3.3).
-    guard let command = spec.commands.first else { fail("no command to drive") }
+    // 3. Drive each step in order on its surface, within ONE continuous capture. Per
+    //    step: nav to that surface's tab, set the composer (prologue delivered as
+    //    composer text — Claude.app has no system-prompt flag), submit, write
+    //    `step-K-submitted` (carrying the surface), then wait for record.sh's
+    //    `step-K-done` (it runs the turn-end watch for THAT surface's coordination
+    //    provider). The window-level capture records the tab switches between steps.
+    for (k, step) in spec.steps.enumerated() {
+        let sel = try allSelectors.surface(step.surface)
 
-    // The prologue (rig_checkpoint / rig_turn_end instructions) is delivered as
-    // part of the composer text — Claude.app Chat has no system-prompt flag, so
-    // the first user message is the only channel. Without this the model never
-    // learns to call the rig tools, producing no checkpoints / turn-end
-    // (rr-2pp.3.6 integration finding).
-    let prompt = spec.systemPromptPrologue.map { "\($0)\n\n\(command)" } ?? command
+        let navButton = armWait(role: sel.navButton.role, description: sel.navButton.axDescription)
+        guard ax.press(navButton) else { fail("AXPress failed on \(step.surface) nav button (step \(k))") }
 
-    // 3. Composer: set the prompt value (element-scoped, safe).
-    let composer = armWait(role: selectors.composer.role, description: selectors.composer.axDescription)
-    guard ax.setValue(composer, prompt) else { fail("AXValue set failed on composer") }
+        let prompt = step.systemPromptPrologue.map { "\($0)\n\n\(step.command)" } ?? step.command
+        let composer = armWait(role: sel.composer.role, description: sel.composer.axDescription)
+        guard ax.setValue(composer, prompt) else { fail("AXValue set failed on composer (step \(k))") }
 
-    // 4. Start capture BEFORE the submit (writer session begins on the first
-    //    frame's PTS, ahead of the first model output).
-    try capture.start()
+        // Start capture before the FIRST submit (writer session begins on the first
+        // frame's PTS, ahead of the first model output); later steps share it.
+        if k == 0 { try capture.start() }
 
-    // 5. Submit via a process-targeted Return (INVARIANT 2), then record the
-    //    prompt-submitted sentinel — the driver's analogue of the CLI's
-    //    UserPromptSubmit hook.
-    ax.postReturnKeyToRig()
-    try sentinels.writeMarker("prompt-submitted")
-    log("submitted; recording -> \(config.tmpRoot)/\(config.session).mov; waiting for agent-done")
+        // Submit via the process-targeted Return (INVARIANT 2). `step-K-submitted`
+        // carries the surface; `prompt-submitted` is kept as a step-0 alias for the
+        // existing single-turn consumers (e.g. bin/desktop-gate-smoke.sh).
+        ax.postReturnKeyToRig()
+        try sentinels.write(suffix: "step-\(k)-submitted", content: step.surface)
+        if k == 0 { try sentinels.writeMarker("prompt-submitted") }
+        log("step \(k) (\(step.surface)) submitted; waiting for step-\(k)-done")
 
-    // 6. record.sh owns the turn-end watch; it writes agent-done when the turn
-    //    idles. Wait for it (session ceiling), then flush the capture.
-    let agentDone = "\(config.tmpRoot)/\(config.session).agent-done"
+        let stepDone = sentinels.path("step-\(k)-done")
+        _ = try waiter.wait(label: "step-\(k)-done", timeout: 1800, poll: 1) {
+            FileManager.default.fileExists(atPath: stepDone) ? true : nil
+        }
+    }
+
+    // 4. record.sh writes agent-done after the last step's turn-end — the final
+    //    flush signal (teardown timing stays with record.sh, as in the single-turn
+    //    contract). Wait for it, then stop the stream + finishWriting().
+    let agentDone = sentinels.path("agent-done")
     _ = try waiter.wait(label: "agent-done", timeout: 1800, poll: 1) {
         FileManager.default.fileExists(atPath: agentDone) ? true : nil
     }
-
-    // 7. Teardown: stop the stream + finishWriting() to flush the .mov.
     try capture.finish()
     log("capture flushed; done")
     exit(0)

@@ -256,6 +256,36 @@ Desktop-specific behavior:
 - **Example specs**: `examples/desktop-chat.json`, `examples/desktop-code.json`,
   `examples/desktop-cowork.json` — one per surface, each recorded 10× clean in the Phase 4 gate.
 
+#### Multi-surface choreography (`steps[]`)
+
+A single desktop recording can tour **multiple surfaces in one continuous capture** by
+giving an ordered top-level `steps[]` instead of a single `surface` + `agent.command`. Each
+step is one turn on one surface; the driver navigates to the step's tab, drives the command,
+waits for that surface's turn-end, then advances — all within one window capture (the tab
+switches are recorded). `steps[]` supersedes the single-surface fields; omit it and a legacy
+single-surface spec behaves exactly as before.
+
+```jsonc
+{
+  "backend": "desktop",
+  "steps": [
+    { "surface": "code",   "system_prompt_prologue": "…load the bridge tools…", "command": "write /tmp/…/shared-fact.txt" },
+    { "surface": "chat",   "system_prompt_prologue": "…load the bridge tools…", "command": "narrate what other surfaces can see" },
+    { "surface": "cowork", "command": "read the file back and report what you observe" }
+  ],
+  "desktop": { "checkpoints": [ { "name": "wrote-shared", "required": true } ], "trusted_folders": ["/tmp/…"] }
+}
+```
+
+Coordination is **per step** — a recording may mix providers (the Code/Chat steps use the
+bridge; the CoWork step uses `agent-transcript-tail`). `record.sh` runs the turn-end watch
+for each step's surface in turn (handshaking with the driver via `step-K-submitted` /
+`step-K-done` sentinels). Validation targets the **bridge transcript** whenever any step
+used the bridge (it carries those steps' checkpoints); a spec whose every step is CoWork
+validates the `audit.jsonl` instead. `examples/desktop-tiers.json` is the worked example: it
+walks Code → Chat → CoWork to show what each surface can and cannot see across the
+filesystem and session boundaries.
+
 #### One-time manual setup (per `Claude-Rig` profile)
 
 The bridge and the Code working folder are **not** scriptable end-to-end; do these once:

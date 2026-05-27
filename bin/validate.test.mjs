@@ -371,3 +371,43 @@ test("desktop/cowork: the LAST {type:result} decides (a later success after an e
     assert.equal(r.code, 0, r.stderr);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// --- rr-u07: multi-surface steps[] validation target (mirrors record.sh USED_BRIDGE) ---
+
+test("desktop/multi-surface: a steps[] spec with bridge steps validates the bridge transcript", () => {
+  const dir = sandbox();
+  try {
+    const spec = {
+      backend: "desktop",
+      steps: [
+        { surface: "code", command: "write the file" },
+        { surface: "chat", command: "narrate it" },
+        { surface: "cowork", command: "read it back" },
+      ],
+      desktop: { checkpoints: [{ name: "wrote-shared", required: true }, { name: "narrated", required: true }] },
+      validate: { must_contain: ["wrote-shared", "narrated"] },
+    };
+    // The bridge transcript carries the two bridge steps' checkpoints + turn-ends
+    // (CoWork drops the bridge tools, so it contributes none).
+    const data = transcript([
+      { tool: "rig_checkpoint", args: { name: "wrote-shared" } },
+      { tool: "rig_turn_end" },
+      { tool: "rig_checkpoint", args: { name: "narrated" } },
+      { tool: "rig_turn_end" },
+    ]);
+    const r = run(dir, spec, { dataName: "bridge.jsonl", dataContent: data });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("desktop/multi-surface: an all-cowork steps[] spec validates the audit transcript, not the bridge", () => {
+  const dir = sandbox();
+  try {
+    // No bridge step => validate.mjs must read the audit.jsonl, NOT bridge-validate
+    // it (which would fail 'last call must be rig_turn_end'). A steps[] spec has no
+    // top-level surface to fall back to, so this locks the USED_BRIDGE mirror.
+    const spec = { backend: "desktop", steps: [{ surface: "cowork", command: "a" }, { surface: "cowork", command: "b" }] };
+    const r = run(dir, spec, { dataName: "audit.jsonl", dataContent: audit(AUDIT_OK) });
+    assert.equal(r.code, 0, r.stderr);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
