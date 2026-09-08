@@ -65,11 +65,11 @@ let capture = ScreenCaptureSink(rigPid: config.rigPid, outputPath: "\(config.tmp
 let waiter = WaitForStable()
 
 // armWait helper: re-arm AXManualAccessibility before every probe (INVARIANT 1).
-func armWait(role: String, description: String, timeout: Double = 30, poll: Double = 0.5) -> AXDriver.Element {
+func armWait(_ selector: DesktopDriverCore.Selector, timeout: Double = 30, poll: Double = 0.5) -> AXDriver.Element {
     do {
-        return try waiter.wait(label: "\(role):\(description)", timeout: timeout, poll: poll,
+        return try waiter.wait(label: selector.label, timeout: timeout, poll: poll,
                                rearm: { ax.armManualAccessibility() }) {
-            ax.find(role: role, description: description)
+            ax.find(selector)
         }
     } catch {
         fail("\(error)")
@@ -79,11 +79,11 @@ func armWait(role: String, description: String, timeout: Double = 30, poll: Doub
 // Like armWait, but resolves the composer among ALL role+description matches via
 // findComposer (prefers the focused / on-screen one). Used at compose time so a
 // transient composer left mid-surface-transition is not the one we drive (rr-bw3).
-func armWaitComposer(role: String, description: String, timeout: Double = 30, poll: Double = 0.5) -> AXDriver.Element {
+func armWaitComposer(_ selector: DesktopDriverCore.Selector, timeout: Double = 30, poll: Double = 0.5) -> AXDriver.Element {
     do {
-        return try waiter.wait(label: "composer \(role):\(description)", timeout: timeout, poll: poll,
+        return try waiter.wait(label: "composer \(selector.label)", timeout: timeout, poll: poll,
                                rearm: { ax.armManualAccessibility() }) {
-            ax.findComposer(role: role, description: description)
+            ax.findComposer(selector)
         }
     } catch {
         fail("\(error)")
@@ -119,8 +119,14 @@ do {
     for (k, step) in spec.steps.enumerated() {
         let sel = try allSelectors.surface(step.surface)
 
-        let navButton = armWait(role: sel.navButton.role, description: sel.navButton.axDescription)
-        guard ax.press(navButton) else { fail("AXPress failed on \(step.surface) nav button (step \(k))") }
+        // Reaching a surface may take several presses (rr-ay1: the mode radio at
+        // the top of the sidebar, then the composer's Chat/Cowork radio). Each
+        // press re-renders the SPA, so let it settle before locating the next.
+        for (n, navSel) in sel.nav.enumerated() {
+            let navEl = armWait(navSel)
+            guard ax.press(navEl) else { fail("AXPress failed on \(step.surface) nav[\(n)] \(navSel.label) (step \(k))") }
+            Thread.sleep(forTimeInterval: 0.75)
+        }
 
         let prompt = step.systemPromptPrologue.map { "\($0)\n\n\(step.command)" } ?? step.command
 
@@ -129,7 +135,7 @@ do {
         // prefers the focused / on-screen composer among ALL matches, so we drive the
         // visible one, not a stale/transient node left from the previous surface.
         Thread.sleep(forTimeInterval: 0.6)
-        let composer = armWaitComposer(role: sel.composer.role, description: sel.composer.axDescription)
+        let composer = armWaitComposer(sel.composer)
         guard ax.setValue(composer, prompt) else { fail("AXValue set failed on composer (step \(k))") }
         // We deliberately do NOT gate on a kAXValue read-back: these are contenteditable
         // editors whose kAXValue does not reflect a programmatic set, so an exact

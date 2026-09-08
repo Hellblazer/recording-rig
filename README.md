@@ -255,6 +255,17 @@ Desktop-specific behavior:
   spec that puts `gates[]` or a `required` checkpoint on it (rather than silently dropping them).
 - **Example specs**: `examples/desktop-chat.json`, `examples/desktop-code.json`,
   `examples/desktop-cowork.json` — one per surface, each recorded 10× clean in the Phase 4 gate.
+- **Selectors drift with Claude.app upgrades.** The driver locates the surface switch and the
+  composer through `bin/desktop-ax-selectors.json`: each surface has an ordered `nav[]` of
+  elements to press (role + `description` and/or `title`) and a `composer`. When a run dies at
+  `armWait timed out ... waiting for <selector>`, re-discover with `bin/ax-dump <rig-pid>` and
+  edit the JSON — no rebuild. The committed file matches Claude.app 1.46388.
+
+A one-turn Chat tutorial that explains the backend from inside the app, recorded with
+[`test-runs/tutorial-desktop-chat.json`](test-runs/tutorial-desktop-chat.json) (three ordered
+checkpoints, then `rig_turn_end`):
+
+![desktop chat tutorial](docs/assets/desktop-tutorial.gif)
 
 #### Multi-surface choreography (`steps[]`)
 

@@ -39,24 +39,33 @@ final class AXDriver: AXDriving {
     }
 
     func find(role: String, description: String) -> AXUIElement? {
-        search(from: app, role: role, description: description, depth: 0)
+        find(DesktopDriverCore.Selector(role: role, axDescription: description))
     }
 
-    // Bounded DFS for a role + AXDescription match. Depth cap guards against a
+    /// First DFS match of a selector (role + description and/or title, rr-ay1).
+    func find(_ selector: DesktopDriverCore.Selector) -> AXUIElement? {
+        search(from: app, selector: selector, depth: 0)
+    }
+
+    // Does this element satisfy the selector? Reads role/description/title once.
+    private func matches(_ element: AXUIElement, _ selector: DesktopDriverCore.Selector) -> Bool {
+        selector.matches(role: stringAttr(element, kAXRoleAttribute),
+                         description: stringAttr(element, kAXDescriptionAttribute),
+                         title: stringAttr(element, kAXTitleAttribute))
+    }
+
+    // Bounded DFS for a selector match. Depth cap guards against a
     // pathological/cyclic tree (the validated Chat tree is ~265-371 nodes).
-    private func search(from element: AXUIElement, role: String, description: String, depth: Int) -> AXUIElement? {
+    private func search(from element: AXUIElement, selector: DesktopDriverCore.Selector, depth: Int) -> AXUIElement? {
         if depth > 80 { return nil }
-        if stringAttr(element, kAXRoleAttribute) == role,
-           stringAttr(element, kAXDescriptionAttribute) == description {
-            return element
-        }
+        if matches(element, selector) { return element }
         var childrenRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
               let children = childrenRef as? [AXUIElement] else {
             return nil
         }
         for child in children {
-            if let found = search(from: child, role: role, description: description, depth: depth + 1) {
+            if let found = search(from: child, selector: selector, depth: depth + 1) {
                 return found
             }
         }
@@ -73,28 +82,33 @@ final class AXDriver: AXDriving {
     // transient/duplicate composers in the Chromium a11y tree mid-transition, so
     // find() (first DFS match) can return the wrong one (rr-bw3).
     func findAll(role: String, description: String) -> [AXUIElement] {
+        findAll(DesktopDriverCore.Selector(role: role, axDescription: description))
+    }
+
+    func findAll(_ selector: DesktopDriverCore.Selector) -> [AXUIElement] {
         var out: [AXUIElement] = []
-        collect(from: app, role: role, description: description, depth: 0, into: &out)
+        collect(from: app, selector: selector, depth: 0, into: &out)
         return out
     }
 
-    private func collect(from element: AXUIElement, role: String, description: String, depth: Int, into out: inout [AXUIElement]) {
+    private func collect(from element: AXUIElement, selector: DesktopDriverCore.Selector, depth: Int, into out: inout [AXUIElement]) {
         if depth > 80 { return }
-        if stringAttr(element, kAXRoleAttribute) == role,
-           stringAttr(element, kAXDescriptionAttribute) == description {
-            out.append(element)
-        }
+        if matches(element, selector) { out.append(element) }
         var childrenRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
               let children = childrenRef as? [AXUIElement] else { return }
-        for child in children { collect(from: child, role: role, description: description, depth: depth + 1, into: &out) }
+        for child in children { collect(from: child, selector: selector, depth: depth + 1, into: &out) }
     }
 
     // Resolve which composer to drive among matches: prefer the focused / on-screen
     // one (rr-bw3 — the settled, visible composer is [focused]; a transient one
     // grabbed mid-transition is not). Pure ranking lives in selectComposerIndex.
     func findComposer(role: String, description: String) -> AXUIElement? {
-        let matches = findAll(role: role, description: description)
+        findComposer(DesktopDriverCore.Selector(role: role, axDescription: description))
+    }
+
+    func findComposer(_ selector: DesktopDriverCore.Selector) -> AXUIElement? {
+        let matches = findAll(selector)
         guard !matches.isEmpty else { return nil }
         let candidates = matches.map { ComposerCandidate(focused: isFocused($0), onScreen: isOnScreen($0)) }
         guard let idx = selectComposerIndex(candidates) else { return nil }
