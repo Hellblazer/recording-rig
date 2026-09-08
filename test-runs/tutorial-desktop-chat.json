@@ -1,0 +1,28 @@
+{
+  "session": "tutorial-desktop-chat",
+  "backend": "desktop",
+  "surface": "chat",
+  "agent": {
+    "command": "We are recording a one-minute tutorial about the desktop backend of a tool called recording-rig, which records Claude Desktop sessions as GIFs. Present it as three short sections. Each section is a bold title followed by at most two plain sentences, and after writing each section call the rig_checkpoint tool with the name given in brackets before writing the next one.\n\nSection 1, 'What gets recorded' [section-1]: the tool drives this Claude Desktop window through macOS accessibility and captures the window itself with ScreenCaptureKit, so there is no terminal and no screen scraping.\n\nSection 2, 'How the driver knows you are done' [section-2]: the model reports progress through the Recording Rig Bridge tools, rig_checkpoint marks a named milestone and rig_turn_end says the turn is finished, so the driver never guesses from the UI.\n\nSection 3, 'How the GIF earns its place' [section-3]: the run only renders a GIF if the bridge transcript contains every required checkpoint in order and ends with rig_turn_end, so a session that quietly went wrong never publishes.\n\nAfter section 3, write the single line TUTORIAL_COMPLETE and then call the rig_turn_end tool."
+  },
+  "system_prompt_prologue": "First, load the Recording Rig Bridge tools (rig_checkpoint, rig_turn_end) so they are available. Then do the task below exactly as written, calling rig_checkpoint with the bracketed name after each section, and as your final step call the rig_turn_end tool.",
+  "desktop": {
+    "checkpoints": [
+      { "name": "section-1", "required": true },
+      { "name": "section-2", "required": true },
+      { "name": "section-3", "required": true }
+    ]
+  },
+  "gates": [],
+  "validate": {
+    "must_contain_in_order": ["section-1", "section-2", "section-3", "rig_turn_end"],
+    "must_not_contain": []
+  },
+  "pacing": {
+    "idle_seconds": 8,
+    "turn_timeout_sec": 240,
+    "exit_hold_sec": 10,
+    "attach_gap_sec": 15,
+    "tmux_size": "1280x800"
+  }
+}

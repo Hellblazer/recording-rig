@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Desktop selectors drift on Claude.app 1.46388** (rr-ay1) — the sidebar Chat/Code/Cowork
+  `AXButton`s became two radio groups (a top-left mode radio `Chat and Cowork` | `Code`, and the
+  composer's `Surface` group `Chat` | `Cowork` carrying only an `AXTitle`), so every desktop run
+  died at `armWait timed out ... AXButton:Chat`. `bin/desktop-ax-selectors.json` now gives each
+  surface an ordered `nav[]` press sequence and a selector may match on `title` as well as
+  `description`; the legacy single `navButton` key still decodes. `ax-dump` lists
+  `AXRadioButton` by default so the next drift is visible without `RIG_AXDUMP_ROLES`.
+
+### Added
+- `test-runs/tutorial-desktop-chat.json` — a Chat-surface tutorial spec (three ordered
+  checkpoints, `TUTORIAL_COMPLETE` terminator) recorded against Claude.app 1.46388.
+
 ## [0.3.0] — 2026-05-27
 
 **Multi-surface desktop choreography.** A single desktop recording can now tour several

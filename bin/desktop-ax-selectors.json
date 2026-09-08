@@ -1,15 +1,23 @@
 {
   "surfaces": {
     "chat": {
-      "navButton": { "role": "AXButton", "description": "Chat" },
+      "nav": [
+        { "role": "AXRadioButton", "description": "Chat and Cowork" },
+        { "role": "AXRadioButton", "title": "Chat" }
+      ],
       "composer": { "role": "AXTextArea", "description": "Write your prompt to Claude" }
     },
     "code": {
-      "navButton": { "role": "AXButton", "description": "Code" },
+      "nav": [
+        { "role": "AXRadioButton", "description": "Code" }
+      ],
       "composer": { "role": "AXTextArea", "description": "Prompt" }
     },
     "cowork": {
-      "navButton": { "role": "AXButton", "description": "Cowork" },
+      "nav": [
+        { "role": "AXRadioButton", "description": "Chat and Cowork" },
+        { "role": "AXRadioButton", "title": "Cowork" }
+      ],
       "composer": { "role": "AXTextArea", "description": "Write your prompt to Claude" }
     }
   }
