@@ -7,6 +7,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-09-08
+
+**Desktop backend follows Claude.app 1.46388.** Patch release; the CLI backend is unchanged.
+
 ### Fixed
 - **Desktop selectors drift on Claude.app 1.46388** (rr-ay1) — the sidebar Chat/Code/Cowork
   `AXButton`s became two radio groups (a top-left mode radio `Chat and Cowork` | `Code`, and the
