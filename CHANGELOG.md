@@ -7,6 +7,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Desktop driver crashed at capture finish when no frame was ever captured.** `ScreenCaptureSink.finish()`
+  marked the writer input finished even when the writer session had never started, and AVFoundation
+  raised `-[AVAssetWriterInput markAsFinished] Cannot call method when status is 0`, aborting the driver
+  after an otherwise good run and leaving no `.mov`. The input is now finished only while the writer is
+  writing; a zero-frame run prints the existing capture diagnostic instead.
+
 ## [0.3.1] — 2026-09-08
 
 **Desktop backend follows Claude.app 1.46388.** Patch release; the CLI backend is unchanged.

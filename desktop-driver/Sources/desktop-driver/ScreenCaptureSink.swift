@@ -118,8 +118,10 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
         if let stream {
             try? awaitCompletion("stopCapture") { stream.stopCapture(completionHandler: $0) }
         }
-        videoInput?.markAsFinished()
-        if let writer, writer.status == .writing {
+        // Mark the input finished only while the writer is writing: with no frame ever
+        // appended the session never started, and markAsFinished throws an ObjC exception.
+        if let writer, CaptureFinish.mayFinishWriting(writerStatus: writer.status.rawValue) {
+            videoInput?.markAsFinished()
             let semaphore = DispatchSemaphore(value: 0)
             writer.finishWriting { semaphore.signal() }
             semaphore.wait()
