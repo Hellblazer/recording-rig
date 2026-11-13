@@ -13,6 +13,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   raised `-[AVAssetWriterInput markAsFinished] Cannot call method when status is 0`, aborting the driver
   after an otherwise good run and leaving no `.mov`. The input is now finished only while the writer is
   writing; a zero-frame run prints the existing capture diagnostic instead.
+- **Desktop runs recorded nothing when the display had gone to sleep.** With the display asleep,
+  ScreenCaptureKit sends a window only idle frames, never a complete one, so the writer never started
+  and the run ended with zero frames (3 of 10 unattended runs on 2026-11-12). The driver now wakes the
+  display when capture starts and holds it awake until capture finishes.
 
 ## [0.3.1] — 2026-09-08
 

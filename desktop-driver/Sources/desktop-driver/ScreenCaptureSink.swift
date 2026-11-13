@@ -23,6 +23,7 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
     private var videoInput: AVAssetWriterInput?
     private var sessionStarted = false
     private var appendedFrames = 0
+    private let displayWake = DisplayWake()
 
     init(rigPid: pid_t, outputPath: String) {
         self.rigPid = rigPid
@@ -31,6 +32,8 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
     }
 
     func start() throws {
+        // A sleeping display yields only idle frames, so wake it first (DisplayWake.swift).
+        displayWake.hold(reason: "recording-rig desktop capture")
         let content = try shareableContent()
         // rr-79v: pick the LARGEST on-screen window for the rig pid, not the first
         // — v1.9255.0 exposes a small secondary window (~280x320) for the same pid,
@@ -138,6 +141,7 @@ final class ScreenCaptureSink: NSObject, CaptureSink, SCStreamOutput {
                     "[desktop-driver] capture diagnostic: appendedFrames=\(appendedFrames) writerStatus=\(status.rawValue) error=\(err)\n".utf8))
             }
         }
+        displayWake.release()
     }
 
     // MARK: - completion-handler -> synchronous bridges
